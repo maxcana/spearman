@@ -4,9 +4,9 @@ use colored::{ColoredString, Colorize};
 pub fn log(level: &str, msg: &str) {
     let left: ColoredString =
         match level {
-            "INFO" => "[INFO]".into(),
-            "ERROR" => "[ERROR]".red(),
-            "FATAL" => " FATAL ".white().on_red(),
+            "INFO" => " YAP ".black().on_white(),
+            "ERROR" => " ERROR ".white().on_red(),
+            "FATAL" => " FATAL ".black().on_red(),
             _ => "[UNKNOWN]".into()
         };
 

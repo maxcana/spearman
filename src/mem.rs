@@ -5,9 +5,10 @@ use winapi::um::{
     psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO}, winnt::LPSTR,
 };
 use winapi::{ctypes::c_void, shared::minwindef::HMODULE};
+use windows::{Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress}, core::s};
 
 #[macro_use]
-use crate::log;
+use crate::{log, val::PATCH_AT_DLL};
 pub struct Modu {
     pub hmodule: HMODULE,
     pub info: MODULEINFO
@@ -47,4 +48,50 @@ pub unsafe fn find_module(target: &str) -> Result<Modu, u8> { unsafe {
         }
     }
     error!("Searched through {} modules; failed to find {}.", lpcb_needed / EIGHT, target); Err(2)
+}}
+
+
+
+
+
+
+
+
+// secret undocumented LdrRegisterDllNotification tech
+// because its undocumented its not part of winapi crate so we are gonna have to make the typedefs and find it in ntdll ourselves
+// https://learn.microsoft.com/en-us/windows/win32/devnotes/ldrregisterdllnotification
+
+// typedefs
+    type LdrDllNotificationFn = unsafe extern "system" fn(notification_reason: u32, notification_data: *const LDR_DLL_NOTIFICATION_DATA, context: *mut c_void);
+    const LDR_DLL_NOTIFICATION_REASON_LOADED: u32 = 1; const LDR_DLL_NOTIFICATION_REASON_UNLOADED: u32 = 2;
+    #[repr(C)] struct UNICODE_STRING { Length: u16, MaximumLength: u16, Buffer: *const u16}
+    #[repr(C)] struct LDR_DLL_LOADED_NOTIFICATION_DATA { Flags: u32, FullDllName: *const UNICODE_STRING, BaseDllName: *const UNICODE_STRING, DllBase: *mut c_void, SizeOfImage: u32}
+
+    // theres unloaded notification too btw, this is not a complete definition
+    type LDR_DLL_NOTIFICATION_DATA = LDR_DLL_LOADED_NOTIFICATION_DATA;
+// end typedefs
+
+/// calls crate::on_dll() when PATCH_AT_DLL loads
+pub unsafe fn register_dll_hook() { unsafe {
+    
+    let ntdll = GetModuleHandleA(s!("ntdll.dll")).unwrap();
+    let LdrRegisterDllNotification: unsafe extern "system" fn(u32, LdrDllNotificationFn, *mut c_void, *mut *mut c_void) -> i32 = std::mem::transmute(GetProcAddress(ntdll, s!("LdrRegisterDllNotification")).unwrap());
+    
+    // we are supposed to use this cookie to unregister the callback with LdrUnregisterDllNotification when our dll is detached. ill do that if i feel like it
+    let mut cookie = std::ptr::null_mut();
+
+    LdrRegisterDllNotification(0, dll_callback, std::ptr::null_mut(), &mut cookie);
+}}
+
+unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFICATION_DATA, _context: *mut c_void) { unsafe {
+    if reason != LDR_DLL_NOTIFICATION_REASON_LOADED { return }
+
+    let name_us = &*(*data).BaseDllName;
+    let name = String::from_utf16_lossy( std::slice::from_raw_parts(name_us.Buffer, (name_us.Length / 2) as usize) ).to_lowercase();
+
+    if name == PATCH_AT_DLL {
+        info!("{} loaded!", PATCH_AT_DLL);
+        crate::on_dll();
+        // spawn watcher or set a flag
+    }
 }}
