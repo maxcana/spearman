@@ -1,6 +1,6 @@
 // mem.rs: wrapper for windows API functions
 
-use std::{default, ptr, str, sync::atomic::{AtomicPtr, Ordering::SeqCst}};
+use std::{default, ffi::CString, mem, ptr, str, sync::atomic::{AtomicPtr, Ordering::SeqCst}};
 
 use winapi::um::{
     handleapi::CloseHandle, processthreadsapi::*, psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO},
@@ -9,8 +9,9 @@ use winapi::um::{
     memoryapi::{VirtualProtect}
 };
 use winapi::{ctypes::c_void, shared::minwindef::HMODULE};
-use windows::{Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress}, core::s};
+use windows::{Win32::{System::LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA}}, core::{PCSTR, s}};
 
+use crate::val::VERSION_DLL_NAME;
 #[macro_use]
 use crate::{log, val::PATCH_AT_DLL};
 pub struct Modu {
@@ -160,4 +161,47 @@ pub unsafe fn res_threads(handles: Vec<HANDLE>) { unsafe {
         if ResumeThread(handle) == 0xFFFFFFFF { error!("Failed to resume thread: Handle={}.", handle as u64) }
         CloseHandle(handle);
     }
+}}
+
+
+// MARK: Forwarder
+// interacting with the windows API through rust is incredibly painful
+
+/// global var: handle to original dll
+static H_ORIGDLL: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(ptr::null_mut());
+
+pub unsafe fn load_orig_dll() { unsafe {
+    let name_c = CString::new(VERSION_DLL_NAME).unwrap();
+    match LoadLibraryA(PCSTR(name_c.as_ptr() as _)) {
+        Ok(handle) => H_ORIGDLL.store(handle.0, SeqCst),
+        Err(e) => die!("Failed to find {}. Ensure that it is in the game folder; next to this dll.", VERSION_DLL_NAME)
+    }
+}}
+/// get the address of an export of the dll
+pub unsafe fn get_fn_addr(name: &str) -> Result<unsafe extern "system" fn() -> isize, u64> { unsafe{
+    let name_c: CString = CString::new(name).unwrap();
+    match GetProcAddress(windows::Win32::Foundation::HMODULE(H_ORIGDLL.load(SeqCst)), PCSTR(name_c.as_ptr() as _)) {
+        Some(f) => Ok(f),
+        None => { error!("Can't find address of {} in {}.", name, VERSION_DLL_NAME); Err(1) }
+    }
+}}
+
+/// defines a function mimicking the original dll's function
+/// 
+/// ensure you call load_orig_dll to set up the handle before said function is called for the first time
+// note to self: you dont get hover documentation inside a macro.
+macro_rules! forward { ($name:ident) => {
+    #[unsafe(no_mangle)]
+    pub unsafe extern "system" fn $name() { unsafe{
+        info!("Forwarding {} call to {}", stringify!($name), VERSION_DLL_NAME);
+        match get_fn_addr(stringify!($name)) {
+            Ok(addr) => {
+                // transmute means: just convert the type please, idc about the type system
+                info!("Found address of {}::{}: {:x}", stringify!($name), VERSION_DLL_NAME, addr as usize);
+                let f: unsafe extern "system" fn() = std::mem::transmute(addr);
+                f();
+            },
+            Err(_) => {info!("Skipping {}", stringify!($name)); return}
+        };
+    }}
 }}

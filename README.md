@@ -22,7 +22,7 @@ you know The Crucible? the roguelite gamemode where you have to fight against wa
 
 #### I thought it was quite fun, but it would be funner if you could build walls.
 
-### 1.
+### 0.
 
 build a mod using the in-game content editor that contains game files you want to patch (for me `Data.sga/data/scar/rogue/rogue_factions.scar`)
 
@@ -39,13 +39,17 @@ local removed_types = {
 }
 ```
 
-- build the mod, take the .sga file from `archives/`.
+- build the mod, take the .sga file from `/archives/crucible_walls.sga` under the mod folder.
 
-### 2.
+## ❓ hwo to use dis
+
+so you have an unsigned sga file you want to load; how?
+
+### 1.
 
 put the sga in the load order.
 
-- go to your game folder, then open `RelicGame.module`.
+- go to your game folder `C:\Program Files (x86)\Steam\steamapps\common\Age of Empires IV`, then open `RelicGame.module`
 - add the following to the end:
 
 ```ini
@@ -57,11 +61,21 @@ archive.01 = AmogUs
 
 - place `crucible_walls.sga` in `/cardinal/archives`
 
+### 2.
+
+inject spearman.
+
+- rename `spearman.dll` to `version.dll`
+- place it in your game folder (the one with `RelicCardinal.exe`)
+- copy `C:\Windows\System32\version.dll`, rename it to `version_orig.dll`, move it to the game folder (next to `version.dll`)
+
+the game will run `version.dll` thinking it's a normal DLL, but it's actually just an imposter: `spearman.dll`.
+
+whenever the game calls a function that `version.dll` normally contains, we forward it to `version_orig.dll` so all the functions work.
+
 ### 3.
 
-inject spearman in early startup.
-
-enjoy walls in crucible!
+to uninstall spearman, delete `version.dll` and `version_orig.dll` from your game folder
 
 ## ❓ how dis progwam work
 
@@ -72,7 +86,3 @@ spearman gets around this by patching the function right after it has been unpac
 this is done by waiting for a specific DLL to load, and executing code before DllMain by using `ntdll.LdrRegisterDllNotification`.
 
 #### TLDR; all this program does is replace `837E30FE7431` with `909090909090`
-
-## ❓ hwo to use dis
-
-inject the DLL as soon as possible (before the specific DLL we patch at)

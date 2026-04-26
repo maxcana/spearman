@@ -17,3 +17,9 @@ colored = "3.1.1"
 
 [lib]
 crate-type = ["cdylib"] # compile to dll
+# name = "version" # call the dll "version.dll" instead of "spearman.dll"
+
+# ditched for dynamic forwarding
+# [target.x86_64-pc-windows-msvc]
+# rustflags = ["-Clink-arg=/DEF:imposter.def"] # automatically link to version_orig.dll exports when building
+# why version.dll? the 17 exports are stable and havent changed since 2007.

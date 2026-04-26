@@ -7,5 +7,7 @@ pub const PATCH_AT_DLL: &str = "devobj.dll";
 
 pub const TARGET: &str = "RelicCardinal.exe";
 
+pub const VERSION_DLL_NAME: &str = "version_orig.dll";
+
 // opcode
 pub const NOP: u8 = 0x90;

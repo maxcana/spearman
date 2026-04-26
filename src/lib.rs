@@ -17,6 +17,7 @@ use std::{slice, thread::{self}, time, ffi::c_void};
 #[macro_use]
 mod log; use log::*;
 mod val; use val::*;
+#[macro_use]
 mod mem; use mem::*;
 
 static MY_HANDLE: AtomicUsize = AtomicUsize::new(0); // global var to store this DLL's handle
@@ -43,7 +44,11 @@ unsafe extern "system" fn DllMain(handle: HINSTANCE, call_reason: DWORD, _: LPVO
 unsafe fn begin() { unsafe {
     AllocConsole();
 
-    info!("Logger initialized...");
+    info!("Logger initialized.");
+    info!("Loading {}...", VERSION_DLL_NAME);
+    load_orig_dll();
+    good!("{} loaded.", VERSION_DLL_NAME);
+
     info!("Waiting for code to unpack...");
     
     // wait until dll loads
@@ -112,3 +117,23 @@ fn scan(pattern: &[u8], first_byte: *mut u8, bytes: usize) -> *mut u8 { unsafe {
     error!("Either the pattern or DLL load order has been changed. This may be due to a game update.");
     die!("Pattern not found.")
 }}
+
+// MARK: Forwarding
+// define the same functions as the dll we are mimicking
+forward!(GetFileVersionInfoA);
+forward!(GetFileVersionInfoByHandle);
+forward!(GetFileVersionInfoExA);
+forward!(GetFileVersionInfoExW);
+forward!(GetFileVersionInfoSizeA);
+forward!(GetFileVersionInfoSizeExA);
+forward!(GetFileVersionInfoSizeExW);
+forward!(GetFileVersionInfoSizeW);
+forward!(GetFileVersionInfoW);
+forward!(VerFindFileA);
+forward!(VerFindFileW);
+forward!(VerInstallFileA);
+forward!(VerInstallFileW);
+forward!(VerLanguageNameA);
+forward!(VerLanguageNameW);
+forward!(VerQueryValueA);
+forward!(VerQueryValueW);
