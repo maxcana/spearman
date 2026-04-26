@@ -1,4 +1,4 @@
-use std::{default, ptr, str};
+use std::{default, ptr, str, sync::atomic::AtomicPtr};
 
 use winapi::um::{
     processthreadsapi::GetCurrentProcess,
@@ -65,11 +65,20 @@ pub unsafe fn find_module(target: &str) -> Result<Modu, u8> { unsafe {
     type LdrDllNotificationFn = unsafe extern "system" fn(notification_reason: u32, notification_data: *const LDR_DLL_NOTIFICATION_DATA, context: *mut c_void);
     const LDR_DLL_NOTIFICATION_REASON_LOADED: u32 = 1; const LDR_DLL_NOTIFICATION_REASON_UNLOADED: u32 = 2;
     #[repr(C)] struct UNICODE_STRING { Length: u16, MaximumLength: u16, Buffer: *const u16}
-    #[repr(C)] struct LDR_DLL_LOADED_NOTIFICATION_DATA { Flags: u32, FullDllName: *const UNICODE_STRING, BaseDllName: *const UNICODE_STRING, DllBase: *mut c_void, SizeOfImage: u32}
+    #[repr(C)] #[derive(Copy, Clone)] struct LDR_DLL_LOADED_NOTIFICATION_DATA { Flags: u32, FullDllName: *const UNICODE_STRING, BaseDllName: *const UNICODE_STRING, DllBase: *mut c_void, SizeOfImage: u32 }
+    #[repr(C)] #[derive(Copy, Clone)] struct LDR_DLL_UNLOADED_NOTIFICATION_DATA { Flags: u32, FullDllName: *const UNICODE_STRING, BaseDllName: *const UNICODE_STRING, DllBase: *mut c_void, SizeOfImage: u32 }
 
     // theres unloaded notification too btw, this is not a complete definition
-    type LDR_DLL_NOTIFICATION_DATA = LDR_DLL_LOADED_NOTIFICATION_DATA;
+    #[repr(C)]
+    union LDR_DLL_NOTIFICATION_DATA {
+        Loaded: LDR_DLL_LOADED_NOTIFICATION_DATA,
+        Unloaded: LDR_DLL_UNLOADED_NOTIFICATION_DATA,
+    }
 // end typedefs
+
+/// global var (cookie to unregister callback on dll detach)
+// AtomicPtr guarantees 1 instruction modification
+static COOKIE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 
 /// calls crate::on_dll() when PATCH_AT_DLL loads
 pub unsafe fn register_dll_hook() { unsafe {
@@ -81,12 +90,13 @@ pub unsafe fn register_dll_hook() { unsafe {
     let mut cookie = std::ptr::null_mut();
 
     LdrRegisterDllNotification(0, dll_callback, std::ptr::null_mut(), &mut cookie);
+    COOKIE.store(cookie, std::sync::atomic::Ordering::SeqCst); // SeqCst = no compiler reordering operaions
 }}
 
 unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFICATION_DATA, _context: *mut c_void) { unsafe {
     if reason != LDR_DLL_NOTIFICATION_REASON_LOADED { return }
 
-    let name_us = &*(*data).BaseDllName;
+    let name_us = &*(*data).Loaded.BaseDllName;
     let name = String::from_utf16_lossy( std::slice::from_raw_parts(name_us.Buffer, (name_us.Length / 2) as usize) ).to_lowercase();
 
     if name == PATCH_AT_DLL {
@@ -94,4 +104,15 @@ unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFIC
         crate::on_dll();
         // spawn watcher or set a flag
     }
+}}
+
+pub unsafe fn unregister_dll_hook() { unsafe {
+    let cookie = COOKIE.load(std::sync::atomic::Ordering::SeqCst);
+    if cookie.is_null() { return }
+
+    let ntdll = GetModuleHandleA(s!("ntdll.dll")).unwrap();
+    let ldr_unregister: unsafe extern "system" fn(*mut c_void) -> i32 = std::mem::transmute( GetProcAddress(ntdll, s!("LdrUnregisterDllNotification")).unwrap() );
+    ldr_unregister(cookie);
+
+    COOKIE.store(ptr::null_mut(), std::sync::atomic::Ordering::SeqCst);
 }}

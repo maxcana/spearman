@@ -8,7 +8,7 @@ use winapi::{
     um::consoleapi::AllocConsole,
 };
 
-use std::{slice, thread::{self}};
+use std::{slice, thread::{self}, time};
 
 // modules
 #[macro_use]
@@ -21,12 +21,14 @@ mod mem; use mem::*;
 #[unsafe(no_mangle)]
 unsafe extern "system" fn DllMain(handle: HINSTANCE, call_reason: DWORD, _: LPVOID) -> bool {
     match call_reason {
-        DLL_PROCESS_ATTACH => {
+        DLL_PROCESS_ATTACH => unsafe {
             MessageBoxA(None, s!("attached"), s!("spearman.dll"), Default::default());
             // do stuff in other thread so we don't freeze process (return from DllMain immediately)
             thread::spawn(|| begin());
         }
-        DLL_PROCESS_DETACH => (),
+        DLL_PROCESS_DETACH => unsafe{
+            unregister_dll_hook()
+        },
         _ => (),
     }
     true
@@ -55,17 +57,30 @@ pub unsafe fn on_dll() { unsafe{
 
     info!("Successfully located {}.", TARGET);
     info!("-----------------");
-    info!("Base address: {:X}", modu.info.lpBaseOfDll as u64);
+    info!("Base address: 0x{:x}", modu.info.lpBaseOfDll as u64);
     info!("Size of image: {} B", modu.info.SizeOfImage);
     info!("-----------------\n");
 
     info!("Signature: {:02X?}", PATTERN);
     info!("Scanning...");
 
-    scan(&PATTERN, modu.info.lpBaseOfDll as *mut u8, modu.info.SizeOfImage as usize);
+    let addr = scan(&PATTERN, modu.info.lpBaseOfDll as *mut u8, modu.info.SizeOfImage as usize);
+
+    info!("Pattern matched at address 0x{:x}...", addr as u32);
+
+    info!("Patching signature check...");
+    addr.write_bytes(NOP, PATTERN.len());
+    info!("Replaced {} bytes with {}.", PATTERN.len(), NOP);
+
+    info!("Patch complete; detaching!");
+
+    // detach dll
+    return
 }}
 
 /// brute force scanning method. *mut u8 is a byte pointer
+/// 
+/// returns: pointer to first byte of pattern
 fn scan(pattern: &[u8], first_byte: *mut u8, bytes: usize) -> *mut u8 { unsafe {
     let slice = slice::from_raw_parts(first_byte, bytes); // slice into a big array
     let len = pattern.len();
