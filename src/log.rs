@@ -2,19 +2,19 @@ use std::io::Write;
 use colored::{ColoredString, Colorize};
 
 pub fn log(level: &str, msg: &str) {
-    let left: ColoredString =
-        match level {
-            "INFO" => " YAP ".black().on_white(),
-            "ERROR" => " ERROR ".white().on_red(),
-            "FATAL" => " FATAL ".black().on_red(),
-            _ => "[UNKNOWN]".into()
-        };
-
     let mut out = std::io::stdout();
-    let _ = writeln!(out, "{} {}", left, msg);
+
+    let _ = match level {
+        "INFO" =>       writeln!(out, "{} {}", " YAP ".black().on_white(), msg),
+        "SUCCESS" =>    writeln!(out, "{} {}", " SUCCESS ".white().on_bright_green(), msg.bright_green()),
+        "ERROR" =>      writeln!(out, "{} {}", " ERROR ".white().on_bright_red(), msg.bright_red()),
+        "FATAL" =>      writeln!(out, "{} {}", " FATAL ".black().on_bright_red(), msg.bright_red()),
+        _ =>            writeln!(out, "{} {}", " UNKNOWN ".black().on_bright_purple(), msg),
+    };
 }
 
 macro_rules! info { ($($arg:tt)*) => { log("INFO", &format!($($arg)*)) } }
+macro_rules! good { ($($arg:tt)*) => { log("SUCCESS", &format!($($arg)*)) } }
 macro_rules! error { ($($arg:tt)*) => { log("ERROR", &format!($($arg)*)) } }
 
 

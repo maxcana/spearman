@@ -69,9 +69,9 @@ AoE4 packs its code, thus making it more difficult to hook, as the code is compl
 
 spearman gets around this by patching the function right after it has been unpacked, but right before it is called.
 
-this is done by waiting for a specific DLL to load, and executing code before DllMain by using ntdll.LdrRegisterDllNotification.
+this is done by waiting for a specific DLL to load, and executing code before DllMain by using `ntdll.LdrRegisterDllNotification`.
 
-#### TLDR; all this program does is replace 837E30FE7431 with 909090909090
+#### TLDR; all this program does is replace `837E30FE7431` with `909090909090`
 
 ## ❓ hwo to use dis
 

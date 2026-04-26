@@ -1,8 +1,12 @@
-use std::{default, ptr, str, sync::atomic::AtomicPtr};
+// mem.rs: wrapper for windows API functions
+
+use std::{default, ptr, str, sync::atomic::{AtomicPtr, Ordering::SeqCst}};
 
 use winapi::um::{
-    processthreadsapi::GetCurrentProcess,
-    psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO}, winnt::LPSTR,
+    handleapi::CloseHandle, processthreadsapi::*, psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO},
+    tlhelp32::{CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next},
+    winnt::{HANDLE, LPSTR, THREAD_SUSPEND_RESUME},
+    memoryapi::{VirtualProtect}
 };
 use winapi::{ctypes::c_void, shared::minwindef::HMODULE};
 use windows::{Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress}, core::s};
@@ -14,6 +18,7 @@ pub struct Modu {
     pub info: MODULEINFO
 }
 
+// MARK: find_module
 // HMODULE = u64
 /// Find module and its info by name. Searches up to 1000 modules under the process this dll is attached to.
 pub unsafe fn find_module(target: &str) -> Result<Modu, u8> { unsafe {
@@ -56,6 +61,7 @@ pub unsafe fn find_module(target: &str) -> Result<Modu, u8> { unsafe {
 
 
 
+// MARK: LdrRegisterDllNotification
 
 // secret undocumented LdrRegisterDllNotification tech
 // because its undocumented its not part of winapi crate so we are gonna have to make the typedefs and find it in ntdll ourselves
@@ -90,7 +96,7 @@ pub unsafe fn register_dll_hook() { unsafe {
     let mut cookie = std::ptr::null_mut();
 
     LdrRegisterDllNotification(0, dll_callback, std::ptr::null_mut(), &mut cookie);
-    COOKIE.store(cookie, std::sync::atomic::Ordering::SeqCst); // SeqCst = no compiler reordering operaions
+    COOKIE.store(cookie, SeqCst); // SeqCst = no compiler reordering operaions
 }}
 
 unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFICATION_DATA, _context: *mut c_void) { unsafe {
@@ -102,17 +108,56 @@ unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFIC
     if name == PATCH_AT_DLL {
         info!("{} loaded!", PATCH_AT_DLL);
         crate::on_dll();
-        // spawn watcher or set a flag
     }
 }}
 
 pub unsafe fn unregister_dll_hook() { unsafe {
-    let cookie = COOKIE.load(std::sync::atomic::Ordering::SeqCst);
+    let cookie = COOKIE.load(SeqCst);
     if cookie.is_null() { return }
 
     let ntdll = GetModuleHandleA(s!("ntdll.dll")).unwrap();
-    let ldr_unregister: unsafe extern "system" fn(*mut c_void) -> i32 = std::mem::transmute( GetProcAddress(ntdll, s!("LdrUnregisterDllNotification")).unwrap() );
-    ldr_unregister(cookie);
+    let LdrUnregisterDllNotification: unsafe extern "system" fn(*mut c_void) -> i32 = std::mem::transmute( GetProcAddress(ntdll, s!("LdrUnregisterDllNotification")).unwrap() );
+    
+    LdrUnregisterDllNotification(cookie);
 
-    COOKIE.store(ptr::null_mut(), std::sync::atomic::Ordering::SeqCst);
+    COOKIE.store(ptr::null_mut(), SeqCst);
+}}
+
+
+
+
+// MARK: Thread pausing
+
+pub unsafe fn sus_threads() -> Vec<HANDLE> { unsafe {
+    let me = GetCurrentThreadId();
+    let pid = GetCurrentProcessId();
+    let snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    let mut handles = Vec::new();
+
+    let mut entry: THREADENTRY32 = std::mem::zeroed();
+    entry.dwSize = size_of::<THREADENTRY32>() as u32;
+
+    if Thread32First(snap, &mut entry) == 0 { return handles; }
+    loop {
+        if entry.th32OwnerProcessID == pid && entry.th32ThreadID != me {
+            let handle = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+            if !handle.is_null() {
+                if SuspendThread(handle) == 0xFFFFFFFF { error!("Failed to suspend thread: ID={} Handle={}.", entry.th32ThreadID, handle as u64) }
+                else { info!("Suspended thread: ID={} Handle={}...", entry.th32ThreadID, handle as u64) }
+
+                handles.push(handle);
+            }
+        }
+        if Thread32Next(snap, &mut entry) == 0 { break; }
+    }
+    CloseHandle(snap);
+    handles
+}}
+
+pub unsafe fn res_threads(handles: Vec<HANDLE>) { unsafe {
+    for handle in handles {
+        info!("Resuming thread: Handle={}...", handle as u64);
+        if ResumeThread(handle) == 0xFFFFFFFF { error!("Failed to resume thread: Handle={}.", handle as u64) }
+        CloseHandle(handle);
+    }
 }}
