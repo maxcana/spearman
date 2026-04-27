@@ -33,9 +33,9 @@ pub unsafe fn init_logger() { unsafe {
     }));
 }}
 
-macro_rules! info { ($($arg:tt)*) => { log("INFO", &format!($($arg)*)) } }
-macro_rules! good { ($($arg:tt)*) => { log("SUCCESS", &format!($($arg)*)) } }
-macro_rules! error { ($($arg:tt)*) => { log("ERROR", &format!($($arg)*)) } }
+macro_rules! info { ($($arg:tt)*) => { crate::log::log("INFO", &format!($($arg)*)) } }
+macro_rules! good { ($($arg:tt)*) => { crate::log::log("SUCCESS", &format!($($arg)*)) } }
+macro_rules! error { ($($arg:tt)*) => { crate::log::log("ERROR", &format!($($arg)*)) } }
 
 
 //||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||//

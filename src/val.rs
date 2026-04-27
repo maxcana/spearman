@@ -16,3 +16,4 @@ pub const NOP: u8 = 0x90;
 
 // windows
 pub const THREAD_PRIORITY_TIME_CRITICAL: c_int = 15;
+pub const THREAD_PRIORITY_NORMAL: c_int = 0;

@@ -7,14 +7,14 @@ use winapi::{
     um::{consoleapi::AllocConsole, memoryapi::{VirtualProtect}, processthreadsapi::{GetCurrentThread, SetThreadPriority}},
 };
 
-use std::sync::{atomic::{AtomicUsize, Ordering::SeqCst}};
+use std::{ptr, sync::atomic::{AtomicPtr, AtomicUsize, Ordering::SeqCst}};
 use std::{slice, thread::{self}, time::Duration};
 // modules
 #[macro_use]
 mod log; use log::*;
 mod val; use val::*;
-#[macro_use]
-mod mem; use mem::*;
+#[macro_use] mod mem; use mem::*;
+mod spy; use spy::*;
 
 static MY_HANDLE: AtomicUsize = AtomicUsize::new(0); // global var to store this DLL's handle
 // entry. "system" defines the calling convention
@@ -35,12 +35,21 @@ unsafe extern "system" fn DllMain(handle: HINSTANCE, call_reason: DWORD, _: LPVO
             load_orig_dll();
             good!("{} loaded.", VERSION_DLL_NAME);
 
+            info!("Clearing warnings.log...");
+            match clear_log() {
+                Ok(_) => good!("warnings.log cleared successfully."),
+                Err(code) => {
+                    error!("Failed to clear warnings.log. Error #{}.", code);
+                    error!("This WILL cause the patch to fail since the spy relies on reading warnings.log.");
+                }
+            }
+
             // do stuff in other thread so we don't freeze process (return from DllMain immediately)
             thread::spawn(|| begin());
         }
         DLL_PROCESS_DETACH => unsafe{
             // we won't detach since we need to maintain the fake version.dll
-            info!("Detached.");
+            info!("DLL detached.");
             unregister_dll_hook()
         },
         _ => (),
@@ -62,6 +71,9 @@ unsafe fn begin() { unsafe {
     // wait until dll loads
     register_dll_hook(); 
 }} 
+
+/// global var; address of pattern
+static ADDR: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
 
 pub unsafe fn on_dll() { unsafe{
     info!("Assuming unpacking is complete.");
@@ -93,23 +105,46 @@ pub unsafe fn on_dll() { unsafe{
     info!("Getting access PAGE_EXECUTE_READWRITE...");
     let mut old: u32 = 0;
     if VirtualProtect(addr as _, PATTERN.len(), PAGE_EXECUTE_READWRITE, &mut old) == 0 { die!("Failed to get PAGE_EXECUTE_READWRITE access using VirtualProtect.") }
-        // addr.write_bytes(NOP, PATTERN.len());
-        // info!("Replaced {} bytes with {:X}.", PATTERN.len(), NOP);
-        // info!("Reverting protection...");
+        addr.write_bytes(NOP, PATTERN.len());
+        info!("Replaced {} bytes with {:X}.", PATTERN.len(), NOP);
+        info!("Reverting protection...");
     if VirtualProtect(addr as _, PATTERN.len(), old, &mut old) == 0 { error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.") };
 
+    ADDR.store(addr, SeqCst);
     // info!("Resuming other threads...");
     // res_threads(handles);
 
-    good!("Patch complete! Freeing console in 3 seconds.");
-    thread::sleep(Duration::from_secs(3));
-    FreeConsole();
+    good!("Patch complete!");
 
+    std::thread::spawn(|| {
+        spy();
+    });
+    // wait for spy.rs to tell us on_archives_loaded()
 
     // dont detach dll since we need the version.dll functions to remain in memory
-
     // to detach dll
     // FreeLibraryAndExitThread(HMODULE(MY_HANDLE.load(SeqCst) as *mut c_void), 0);
+}}
+
+pub unsafe fn on_archives_loaded() { unsafe {
+    good!("All archives loaded!");
+
+    let addr = ADDR.load(SeqCst);
+    info!("Reverting patched bytes...");
+    info!("Getting access PAGE_EXECUTE_READWRITE...");
+    let mut old: u32 = 0;
+    
+    if VirtualProtect(addr as _, PATTERN.len(), PAGE_EXECUTE_READWRITE, &mut old) == 0 { die!("Failed to get PAGE_EXECUTE_READWRITE access using VirtualProtect.") }
+        // write the pattern back
+        addr.copy_from_nonoverlapping(PATTERN.as_ptr(), PATTERN.len());
+        info!("Replaced {} bytes with {:02X?}.", PATTERN.len(), PATTERN);
+        info!("Reverting protection...");
+    if VirtualProtect(addr as _, PATTERN.len(), old, &mut old) == 0 { error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.") };
+    good!("Patch reverted! Memory is clean.");
+
+    info!("Freeing console in 3 seconds.");
+    thread::sleep(Duration::from_secs(3));
+    FreeConsole();
 }}
 
 /// brute force scanning method. *mut u8 is a byte pointer

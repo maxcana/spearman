@@ -129,8 +129,10 @@ pub unsafe fn unregister_dll_hook() { unsafe {
 
 
 
-// MARK: Thread pausing
+// MARK: Thread pausing 
+// (not working atm) (but it isnt necessary i think, we find the pattern fast)
 
+#[deprecated = "This causes deadlocks."]
 pub unsafe fn sus_threads() -> Vec<HANDLE> { unsafe {
     let me = GetCurrentThreadId();
     let pid = GetCurrentProcessId();
@@ -157,6 +159,7 @@ pub unsafe fn sus_threads() -> Vec<HANDLE> { unsafe {
     handles
 }}
 
+#[deprecated = "This causes deadlocks."]
 pub unsafe fn res_threads(handles: Vec<HANDLE>) { unsafe {
     for handle in handles {
         if ResumeThread(handle) == 0xFFFFFFFF { error!("Failed to resume thread: Handle={}", handle as u64) }
