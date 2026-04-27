@@ -1,17 +1,37 @@
-use std::io::Write;
+use std::{io::{BufRead, Write}, ptr, sync::atomic::{AtomicBool, Ordering::SeqCst}, thread, time::Duration};
 use colored::{ColoredString, Colorize};
+use winapi::um::{consoleapi::{GetConsoleMode, SetConsoleMode}, wincon::{ENABLE_VIRTUAL_TERMINAL_PROCESSING}};
+use windows::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
+
+/// this exists to block forwarded dll functions to get logged, which "presses enter" to exit.
+// static BLOCK_LOGGING: AtomicBool = AtomicBool::new(false);
 
 pub fn log(level: &str, msg: &str) {
     let mut out = std::io::stdout();
 
     let _ = match level {
-        "INFO" =>       writeln!(out, "{} {}", " YAP ".black().on_white(), msg),
-        "SUCCESS" =>    writeln!(out, "{} {}", " SUCCESS ".white().on_bright_green(), msg.bright_green()),
-        "ERROR" =>      writeln!(out, "{} {}", " ERROR ".white().on_bright_red(), msg.bright_red()),
-        "FATAL" =>      writeln!(out, "{} {}", " FATAL ".black().on_bright_red(), msg.bright_red()),
-        _ =>            writeln!(out, "{} {}", " UNKNOWN ".black().on_bright_purple(), msg),
+        "INFO" =>       writeln!(out, "{} {}", "  YAP  ".black().on_bright_white(), msg),
+        "SUCCESS" =>    writeln!(out, "{} {}", "SUCCESS".black().on_bright_green(), msg.bright_green()),
+        "ERROR" =>      writeln!(out, "{} {}", " ERROR ".black().on_bright_red(), msg.bright_red()),
+        "FATAL" =>      writeln!(out, "{} {}", " FATAL ".bright_white().on_red(), msg.bright_red()),
+        _ =>            writeln!(out, "{} {}", "UNKNOWN".black().on_bright_purple(), msg),
     };
 }
+
+pub unsafe fn init_logger() { unsafe {
+    // enable ANSI
+    let handle = match GetStdHandle(STD_OUTPUT_HANDLE) {
+        Ok(h) => h,
+        Err(h) => {return;}
+    };
+    let mut mode = 0u32;
+    GetConsoleMode(std::mem::transmute(handle), &mut mode);
+    SetConsoleMode(std::mem::transmute(handle), mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING); // interpret ANSI escape sequences
+    
+    std::panic::set_hook(Box::new(|info| { 
+        log("FATAL", &format!("PANIC: {}", info)); 
+    }));
+}}
 
 macro_rules! info { ($($arg:tt)*) => { log("INFO", &format!($($arg)*)) } }
 macro_rules! good { ($($arg:tt)*) => { log("SUCCESS", &format!($($arg)*)) } }
@@ -28,9 +48,8 @@ macro_rules! die {
 pub fn die_real(msg: &str) -> ! {
     log("FATAL", msg);
         
-    info!("Press enter to exit...");
-    // keep console alive
-    let _ = std::io::stdin().read_line(&mut String::new());
+    info!("Exiting in 10 seconds...");
+    thread::sleep(Duration::from_secs(10));
 
     // exit just this thread, not the process
     unsafe { winapi::um::processthreadsapi::ExitThread(1); }

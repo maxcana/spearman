@@ -1,6 +1,6 @@
 # spearman
 
-[![Rust](https://img.shields.io/badge/Rust-1.92-orange.svg?style=flat)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.92+-orange.svg?style=flat)](https://www.rust-lang.org/)
 ![Platform](https://img.shields.io/badge/Platform-Windows-blue.svg?style=flat)
 [![Game](https://img.shields.io/badge/Game-Age%20of%20Empires%20IV-green.svg?style=flat)](https://www.ageofempires.com/games/age-of-empires-iv/)
 ![Assembly](https://img.shields.io/badge/Assembly-x86-red.svg?style=flat)

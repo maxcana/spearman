@@ -1,6 +1,6 @@
 // mem.rs: wrapper for windows API functions
 
-use std::{default, ffi::CString, mem, ptr, str, sync::atomic::{AtomicPtr, Ordering::SeqCst}};
+use std::{default, ffi::CString, mem, ptr, str, sync::{OnceLock, atomic::{AtomicPtr, Ordering::SeqCst}}, time};
 
 use winapi::um::{
     handleapi::CloseHandle, processthreadsapi::*, psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO},
@@ -87,9 +87,10 @@ pub unsafe fn find_module(target: &str) -> Result<Modu, u8> { unsafe {
 // AtomicPtr guarantees 1 instruction modification
 static COOKIE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 
+static PAST: OnceLock<time::Instant> = OnceLock::new(); // global instant
+
 /// calls crate::on_dll() when PATCH_AT_DLL loads
 pub unsafe fn register_dll_hook() { unsafe {
-    
     let ntdll = GetModuleHandleA(s!("ntdll.dll")).unwrap();
     let LdrRegisterDllNotification: unsafe extern "system" fn(u32, LdrDllNotificationFn, *mut c_void, *mut *mut c_void) -> i32 = std::mem::transmute(GetProcAddress(ntdll, s!("LdrRegisterDllNotification")).unwrap());
     
@@ -98,6 +99,7 @@ pub unsafe fn register_dll_hook() { unsafe {
 
     LdrRegisterDllNotification(0, dll_callback, std::ptr::null_mut(), &mut cookie);
     COOKIE.store(cookie, SeqCst); // SeqCst = no compiler reordering operaions
+    PAST.set(time::Instant::now()).unwrap();
 }}
 
 unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFICATION_DATA, _context: *mut c_void) { unsafe {
@@ -107,7 +109,7 @@ unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFIC
     let name = String::from_utf16_lossy( std::slice::from_raw_parts(name_us.Buffer, (name_us.Length / 2) as usize) ).to_lowercase();
 
     if name == PATCH_AT_DLL {
-        info!("{} loaded!", PATCH_AT_DLL);
+        info!("{} loaded in {}ms.", PATCH_AT_DLL, PAST.get().unwrap().elapsed().as_millis());
         crate::on_dll();
     }
 }}
@@ -143,8 +145,8 @@ pub unsafe fn sus_threads() -> Vec<HANDLE> { unsafe {
         if entry.th32OwnerProcessID == pid && entry.th32ThreadID != me {
             let handle = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
             if !handle.is_null() {
-                if SuspendThread(handle) == 0xFFFFFFFF { error!("Failed to suspend thread: ID={} Handle={}.", entry.th32ThreadID, handle as u64) }
-                else { info!("Suspended thread: ID={} Handle={}...", entry.th32ThreadID, handle as u64) }
+                if SuspendThread(handle) == 0xFFFFFFFF { error!("Failed to suspend thread: ID={} Handle={}", entry.th32ThreadID, handle as u64) }
+                else { info!("Suspended thread: ID={} Handle={}", entry.th32ThreadID, handle as u64) }
 
                 handles.push(handle);
             }
@@ -157,8 +159,8 @@ pub unsafe fn sus_threads() -> Vec<HANDLE> { unsafe {
 
 pub unsafe fn res_threads(handles: Vec<HANDLE>) { unsafe {
     for handle in handles {
-        info!("Resuming thread: Handle={}...", handle as u64);
-        if ResumeThread(handle) == 0xFFFFFFFF { error!("Failed to resume thread: Handle={}.", handle as u64) }
+        if ResumeThread(handle) == 0xFFFFFFFF { error!("Failed to resume thread: Handle={}", handle as u64) }
+        else { info!("Resumed thread: Handle={}", handle as u64); }
         CloseHandle(handle);
     }
 }}
@@ -174,7 +176,7 @@ pub unsafe fn load_orig_dll() { unsafe {
     let name_c = CString::new(VERSION_DLL_NAME).unwrap();
     match LoadLibraryA(PCSTR(name_c.as_ptr() as _)) {
         Ok(handle) => H_ORIGDLL.store(handle.0, SeqCst),
-        Err(e) => die!("Failed to find {}. Ensure that it is in the game folder; next to this dll.", VERSION_DLL_NAME)
+        Err(e) => die!("[FWD] Failed to find {}. Ensure that it is in the game folder; next to this dll.", VERSION_DLL_NAME)
     }
 }}
 /// get the address of an export of the dll
@@ -182,7 +184,7 @@ pub unsafe fn get_fn_addr(name: &str) -> Result<unsafe extern "system" fn() -> i
     let name_c: CString = CString::new(name).unwrap();
     match GetProcAddress(windows::Win32::Foundation::HMODULE(H_ORIGDLL.load(SeqCst)), PCSTR(name_c.as_ptr() as _)) {
         Some(f) => Ok(f),
-        None => { error!("Can't find address of {} in {}.", name, VERSION_DLL_NAME); Err(1) }
+        None => { error!("[FWD] Can't find address of {} in {}.", name, VERSION_DLL_NAME); Err(1) }
     }
 }}
 
@@ -193,15 +195,14 @@ pub unsafe fn get_fn_addr(name: &str) -> Result<unsafe extern "system" fn() -> i
 macro_rules! forward { ($name:ident) => {
     #[unsafe(no_mangle)]
     pub unsafe extern "system" fn $name() { unsafe{
-        info!("Forwarding {} call to {}", stringify!($name), VERSION_DLL_NAME);
         match get_fn_addr(stringify!($name)) {
             Ok(addr) => {
                 // transmute means: just convert the type please, idc about the type system
-                info!("Found address of {}::{}: {:x}", stringify!($name), VERSION_DLL_NAME, addr as usize);
+                info!("[FWD] Forwarding {} call to {} @{:x}", stringify!($name), VERSION_DLL_NAME, addr as usize);
                 let f: unsafe extern "system" fn() = std::mem::transmute(addr);
                 f();
             },
-            Err(_) => {info!("Skipping {}", stringify!($name)); return}
+            Err(_) => {info!("[FWD] Failed to forward {} call to {}. Address of function not found.", stringify!($name), VERSION_DLL_NAME); return}
         };
     }}
 }}

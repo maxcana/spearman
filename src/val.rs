@@ -1,5 +1,7 @@
 // constant values
 
+use std::os::raw::c_int;
+
 pub const PATTERN: [u8; 6] = [0x83, 0x7E, 0x30, 0xFE, 0x74, 0x31];
 
 /// when this dll is loaded we assume the code has been unpacked
@@ -11,3 +13,6 @@ pub const VERSION_DLL_NAME: &str = "version_orig.dll";
 
 // opcode
 pub const NOP: u8 = 0x90;
+
+// windows
+pub const THREAD_PRIORITY_TIME_CRITICAL: c_int = 15;
