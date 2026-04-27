@@ -56,7 +56,7 @@ put the sga in the load order.
 [data:common:12]
 required = 1
 archiveRoot = cardinal\archives
-archive.01 = AmogUs
+archive.01 = crucible_walls
 ```
 
 - place `crucible_walls.sga` in `/cardinal/archives`

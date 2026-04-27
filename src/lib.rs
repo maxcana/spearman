@@ -116,6 +116,7 @@ pub unsafe fn on_dll() { unsafe{
 
     good!("Patch complete!");
 
+    info!("Starting spy thread...");
     std::thread::spawn(|| {
         spy();
     });
