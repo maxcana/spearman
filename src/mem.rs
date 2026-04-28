@@ -75,7 +75,6 @@ pub unsafe fn find_module(target: &str) -> Result<Modu, u8> { unsafe {
     #[repr(C)] #[derive(Copy, Clone)] struct LDR_DLL_LOADED_NOTIFICATION_DATA { Flags: u32, FullDllName: *const UNICODE_STRING, BaseDllName: *const UNICODE_STRING, DllBase: *mut c_void, SizeOfImage: u32 }
     #[repr(C)] #[derive(Copy, Clone)] struct LDR_DLL_UNLOADED_NOTIFICATION_DATA { Flags: u32, FullDllName: *const UNICODE_STRING, BaseDllName: *const UNICODE_STRING, DllBase: *mut c_void, SizeOfImage: u32 }
 
-    // theres unloaded notification too btw, this is not a complete definition
     #[repr(C)]
     union LDR_DLL_NOTIFICATION_DATA {
         Loaded: LDR_DLL_LOADED_NOTIFICATION_DATA,

@@ -102,13 +102,13 @@ pub unsafe fn on_dll() { unsafe{
     good!("Pattern matched at address 0x{:x}...", addr as u64);
 
     
-    info!("Getting access PAGE_EXECUTE_READWRITE...");
+    info!("Getting access level PAGE_EXECUTE_READWRITE...");
     let mut old: u32 = 0;
-    if VirtualProtect(addr as _, PATTERN.len(), PAGE_EXECUTE_READWRITE, &mut old) == 0 { die!("Failed to get PAGE_EXECUTE_READWRITE access using VirtualProtect.") }
-        addr.write_bytes(NOP, PATTERN.len());
-        info!("Replaced {} bytes with {:X}.", PATTERN.len(), NOP);
+    if VirtualProtect(addr as _, REPLACEMENT.len(), PAGE_EXECUTE_READWRITE, &mut old) == 0 { die!("Failed to get PAGE_EXECUTE_READWRITE access using VirtualProtect.") }
+        addr.copy_from_nonoverlapping(REPLACEMENT.as_ptr(), REPLACEMENT.len());
+        info!("Replaced {} bytes with {:02X?}.", REPLACEMENT.len(), REPLACEMENT);
         info!("Reverting protection...");
-    if VirtualProtect(addr as _, PATTERN.len(), old, &mut old) == 0 { error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.") };
+    if VirtualProtect(addr as _, REPLACEMENT.len(), old, &mut old) == 0 { error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.") };
 
     ADDR.store(addr, SeqCst);
     // info!("Resuming other threads...");
@@ -132,16 +132,17 @@ pub unsafe fn on_archives_loaded() { unsafe {
 
     let addr = ADDR.load(SeqCst);
     info!("Reverting patched bytes...");
-    info!("Getting access PAGE_EXECUTE_READWRITE...");
+    info!("Getting access level PAGE_EXECUTE_READWRITE...");
     let mut old: u32 = 0;
     
-    if VirtualProtect(addr as _, PATTERN.len(), PAGE_EXECUTE_READWRITE, &mut old) == 0 { die!("Failed to get PAGE_EXECUTE_READWRITE access using VirtualProtect.") }
+    if VirtualProtect(addr as _, REPLACEMENT.len(), PAGE_EXECUTE_READWRITE, &mut old) == 0 { die!("Failed to get PAGE_EXECUTE_READWRITE access using VirtualProtect.") }
         // write the pattern back
-        addr.copy_from_nonoverlapping(PATTERN.as_ptr(), PATTERN.len());
-        info!("Replaced {} bytes with {:02X?}.", PATTERN.len(), PATTERN);
+        addr.copy_from_nonoverlapping(PATTERN.as_ptr(), REPLACEMENT.len());
+        info!("Replaced {} bytes with {:02X?}.", REPLACEMENT.len(), PATTERN.split_at(REPLACEMENT.len()));
         info!("Reverting protection...");
-    if VirtualProtect(addr as _, PATTERN.len(), old, &mut old) == 0 { error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.") };
+    if VirtualProtect(addr as _, REPLACEMENT.len(), old, &mut old) == 0 { error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.") };
     good!("Patch reverted! Memory is clean.");
+    info!("Stay secret. Stay hidden. Stay safe.");
 
     info!("Freeing console in 3 seconds.");
     thread::sleep(Duration::from_secs(3));
