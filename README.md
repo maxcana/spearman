@@ -8,9 +8,15 @@
 
 Bypass SGA verification™
 
+# todo
+
+- improve scan algorithm
+- what happens to the [FWD] logs once the console is freed?
+- only read console if 2 new lines available
+
 ## wat is dis
 
-a library that scans module memory space and patches 2 assembly instructions to enable loading unsigned .sga files in Age of Empires 4. with a focus on simplistic code!
+a library that scans module memory space and patches 5 assembly instructions to enable loading unsigned .sga files in Age of Empires 4. with a focus on simplistic code!
 
 this allows greater modding possibilities, as you can patch core game features that the in-game modding tools don't let you.
 
@@ -85,4 +91,4 @@ spearman gets around this by patching the function right after it has been unpac
 
 this is done by waiting for a specific DLL to load, and executing code before DllMain by using `ntdll.LdrRegisterDllNotification`.
 
-#### TLDR; all this program does is replace `837E30FE7431` with `909090909090`
+#### TLDR; all this program does is replace `0F94C0EB0232C0` with `B00190EB02B001`
