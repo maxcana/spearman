@@ -13,6 +13,8 @@ Bypass SGA verification™
 - improve scan algorithm
 - what happens to the [FWD] logs once the console is freed?
 - only read console if 2 new lines available
+- remove unused functions
+- patch somewhere else, allowing NoSig archives as well as FakeSig
 
 ## wat is dis
 

@@ -10,10 +10,10 @@ use winapi::{
 use std::{ptr, sync::atomic::{AtomicPtr, AtomicUsize, Ordering::SeqCst}};
 use std::{slice, thread::{self}, time::Duration};
 // modules
-#[macro_use]
-mod log; use log::*;
+#[macro_use] mod log; use log::*;
+#[macro_use] mod win; use win::*;
 mod val; use val::*;
-#[macro_use] mod mem; use mem::*;
+mod mem; use mem::*;
 mod spy; use spy::*;
 
 static MY_HANDLE: AtomicUsize = AtomicUsize::new(0); // global var to store this DLL's handle
@@ -59,7 +59,6 @@ unsafe extern "system" fn DllMain(handle: HINSTANCE, call_reason: DWORD, _: LPVO
 
 
 // actual code below
-
 unsafe fn begin() { unsafe {
     info!("Worker thread initialized.");
 
@@ -78,48 +77,12 @@ static ADDR: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
 pub unsafe fn on_dll() { unsafe{
     info!("Assuming unpacking is complete.");
 
-    let modu = match find_module(TARGET) {
-        Ok(info) => info,
-        Err(code) => {
-            die!("Failed to find module. Error #{}.", code)
-        }
-    };
-
-    good!("Successfully located {}.", TARGET);
-    info!("-----------------");
-    info!("Base address:  0x{:x}", modu.info.lpBaseOfDll as u64);
-    info!("Size of image: {} B", modu.info.SizeOfImage);
-    info!("-----------------");
-
-    info!("Signature: {:02X?}", PATTERN);
-
-    // info!("Suspending other threads...");
-    // let handles = sus_threads();
-
-    info!("Scanning...");
-    let addr = scan(&PATTERN, modu.info.lpBaseOfDll as *mut u8, modu.info.SizeOfImage as usize);
-
-    good!("Pattern matched at address 0x{:x}...", addr as u64);
-
-    
-    info!("Getting access level PAGE_EXECUTE_READWRITE...");
-    let mut old: u32 = 0;
-    if VirtualProtect(addr as _, REPLACEMENT.len(), PAGE_EXECUTE_READWRITE, &mut old) == 0 { die!("Failed to get PAGE_EXECUTE_READWRITE access using VirtualProtect.") }
-        addr.copy_from_nonoverlapping(REPLACEMENT.as_ptr(), REPLACEMENT.len());
-        info!("Replaced {} bytes with {:02X?}.", REPLACEMENT.len(), REPLACEMENT);
-        info!("Reverting protection...");
-    if VirtualProtect(addr as _, REPLACEMENT.len(), old, &mut old) == 0 { error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.") };
-
-    ADDR.store(addr, SeqCst);
-    // info!("Resuming other threads...");
-    // res_threads(handles);
-
-    good!("Patch complete!");
+    mem::init();
+    SIGCHECK.patch();
+    WOW64PREPAREFOREXCEPTIONHOOKGATE.patch();
 
     info!("Starting spy thread...");
-    std::thread::spawn(|| {
-        spy();
-    });
+    std::thread::spawn(|| { spy(); });
     // wait for spy.rs to tell us on_archives_loaded()
 
     // dont detach dll since we need the version.dll functions to remain in memory
@@ -130,18 +93,8 @@ pub unsafe fn on_dll() { unsafe{
 pub unsafe fn on_archives_loaded() { unsafe {
     good!("All archives loaded!");
 
-    let addr = ADDR.load(SeqCst);
-    info!("Reverting patched bytes...");
-    info!("Getting access level PAGE_EXECUTE_READWRITE...");
-    let mut old: u32 = 0;
-    
-    if VirtualProtect(addr as _, REPLACEMENT.len(), PAGE_EXECUTE_READWRITE, &mut old) == 0 { die!("Failed to get PAGE_EXECUTE_READWRITE access using VirtualProtect.") }
-        // write the pattern back
-        addr.copy_from_nonoverlapping(PATTERN.as_ptr(), REPLACEMENT.len());
-        info!("Replaced {} bytes with {:02X?}.", REPLACEMENT.len(), PATTERN.split_at(REPLACEMENT.len()));
-        info!("Reverting protection...");
-    if VirtualProtect(addr as _, REPLACEMENT.len(), old, &mut old) == 0 { error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.") };
-    good!("Patch reverted! Memory is clean.");
+    SIGCHECK.revert();
+
     info!("Stay secret. Stay hidden. Stay safe.");
 
     info!("Freeing console in 3 seconds.");
@@ -149,23 +102,6 @@ pub unsafe fn on_archives_loaded() { unsafe {
     FreeConsole();
 }}
 
-/// brute force scanning method. *mut u8 is a byte pointer
-/// 
-/// returns: pointer to first byte of pattern
-fn scan(pattern: &[u8], first_byte: *mut u8, bytes: usize) -> *mut u8 { unsafe {
-    let slice = slice::from_raw_parts(first_byte, bytes); // slice into a big array
-    let len = pattern.len();
-
-    for i in 0..=bytes-len {
-        if &slice[i..i + len] == pattern {
-            return first_byte.add(i);
-        }
-    }
-
-    error!("Could not find pattern. Searched {} B.", bytes);
-    error!("Either the pattern or DLL load order has been changed. This may be due to a game update.");
-    die!("Pattern not found.")
-}}
 
 // MARK: Forwarding
 // define the same functions as the dll we are mimicking
