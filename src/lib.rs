@@ -1,7 +1,7 @@
 use windows::Win32::{ System::{SystemServices::*}, UI::WindowsAndMessaging::MessageBoxA };
 use windows::core::*;
 
-use winapi::um::{processthreadsapi::GetThreadPriority};
+use winapi::um::{processthreadsapi::GetThreadPriority, wincon::FreeConsole};
 use winapi::{
     shared::minwindef::{DWORD, HINSTANCE, LPVOID},
     um::{consoleapi::AllocConsole, processthreadsapi::{GetCurrentThread, SetThreadPriority}},
@@ -24,6 +24,7 @@ unsafe extern "system" fn DllMain(handle: HINSTANCE, call_reason: DWORD, _: LPVO
             MessageBoxA(None, s!("attached"), s!("spearman.dll"), Default::default());
 
             AllocConsole();
+            
             init_logger();
 
             info!("Logger initialized.");
@@ -81,6 +82,11 @@ pub unsafe fn on_dll() { unsafe{
 
 pub unsafe fn on_archives_loaded() { unsafe {
     good!("All archives loaded!");
+    good!("Have fun! :D");
+
+    info!("This console will automatically close in 2 seconds to avoid detection.");
+    thread::sleep(std::time::Duration::from_secs(2));
+    FreeConsole();
 }}
 
 
