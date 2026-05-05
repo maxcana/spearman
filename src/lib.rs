@@ -1,7 +1,7 @@
 use windows::Win32::{ System::{SystemServices::*}, UI::WindowsAndMessaging::MessageBoxA };
 use windows::core::*;
 
-use winapi::um::{winnt::PAGE_EXECUTE_READWRITE, wincon::FreeConsole};
+use winapi::um::{processthreadsapi::GetThreadPriority, wincon::FreeConsole, winnt::PAGE_EXECUTE_READWRITE};
 use winapi::{
     shared::minwindef::{DWORD, HINSTANCE, LPVOID},
     um::{consoleapi::AllocConsole, memoryapi::{VirtualProtect}, processthreadsapi::{GetCurrentThread, SetThreadPriority}},
@@ -63,12 +63,16 @@ unsafe fn begin() { unsafe {
     info!("Worker thread initialized.");
 
     if SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) == 0 {
-        error!("Failed to set thread priority to THREAD_PRIORITY_TIME_CRITICAL.")
-    } else { good!("Thread priority set to THREAD_PRIORITY_TIME_CRITICAL."); }
+        error!("Failed to set thread priority to {}.", THREAD_PRIORITY_TIME_CRITICAL)
+    } else {
+        good!("Thread priority set to {}.", GetThreadPriority(GetCurrentThread()));
+    }
+
+    win::hook_console();
 
     info!("Waiting for code to unpack...");
     // wait until dll loads
-    register_dll_hook(); 
+    win::register_dll_hook(); 
 }} 
 
 /// global var; address of pattern
@@ -78,8 +82,9 @@ pub unsafe fn on_dll() { unsafe{
     info!("Assuming unpacking is complete.");
 
     mem::init();
-    SIGCHECK.patch();
-    WOW64PREPAREFOREXCEPTIONHOOKGATE.patch();
+    // SIGCHECK.patch();
+    // WOW64PREPAREFOREXCEPTIONHOOKGATE.patch();
+    // AEGISDFHCHECK.patch();
 
     info!("Starting spy thread...");
     std::thread::spawn(|| { spy(); });
@@ -93,13 +98,13 @@ pub unsafe fn on_dll() { unsafe{
 pub unsafe fn on_archives_loaded() { unsafe {
     good!("All archives loaded!");
 
-    SIGCHECK.revert();
+    // SIGCHECK.revert();
 
-    info!("Stay secret. Stay hidden. Stay safe.");
+    // info!("Stay secret. Stay hidden. Stay safe.");
 
-    info!("Freeing console in 3 seconds.");
-    thread::sleep(Duration::from_secs(3));
-    FreeConsole();
+    // info!("Freeing console in 3 seconds.");
+    // thread::sleep(Duration::from_secs(3));
+    // FreeConsole();
 }}
 
 

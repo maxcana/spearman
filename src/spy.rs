@@ -53,7 +53,7 @@ pub unsafe fn spy() {
                         }
                         if line.contains("Loading step: [Localization]") {
                             info!("Detected localization step.");
-                            unsafe { crate::on_archives_loaded(); }
+                            unsafe { crate::on_archives_loaded(); return; }
                         }
                     });
                 },

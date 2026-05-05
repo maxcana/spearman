@@ -2,12 +2,10 @@
 
 use std::{default, ffi::CString, mem, ptr, str, sync::{OnceLock, atomic::{AtomicPtr, Ordering::SeqCst}}, time};
 
-use winapi::um::{
-    handleapi::CloseHandle, processthreadsapi::*, psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO},
-    tlhelp32::{CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next},
-    winnt::{HANDLE, LPSTR, THREAD_SUSPEND_RESUME},
-    memoryapi::{VirtualProtect}
-};
+use ilhook::x64::{CallbackOption, HookFlags, HookType, Hooker, Registers};
+use winapi::{shared::windef::HWND__, um::{
+    handleapi::CloseHandle, memoryapi::VirtualProtect, processthreadsapi::*, psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO}, tlhelp32::{CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next}, wincon::GetConsoleWindow, winnt::{HANDLE, LPSTR, THREAD_SUSPEND_RESUME}
+}};
 use winapi::{ctypes::c_void, shared::minwindef::HMODULE};
 use windows::{Win32::{System::LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA}}, core::{PCSTR, s}};
 
@@ -126,6 +124,20 @@ pub unsafe fn unregister_dll_hook() { unsafe {
 }}
 
 
+// MARK: Hooking
+unsafe extern "win64" fn false_gcw(regs: *mut Registers, ori_func_ptr:usize, _:usize) -> usize { info!("[Hook] GetConsoleWindow called, returning 0."); 0 }
+pub unsafe fn hook_console() { unsafe {
+    info!("[Hook] Hooking GetConsoleWindow.");
+    if let Err(e) = Hooker::new(
+        GetConsoleWindow as usize,
+        HookType::Retn(false_gcw),
+        CallbackOption::None,
+        0,
+        HookFlags::empty()
+    ).hook() {
+        error!("[Hook] Failed to hook GetConsoleWindow: {}.", e);
+    }
+}}
 
 
 // MARK: Thread pausing 

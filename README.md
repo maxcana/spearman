@@ -15,6 +15,7 @@ Bypass SGA verification™
 - only read console if 2 new lines available
 - remove unused functions
 - patch somewhere else, allowing NoSig archives as well as FakeSig
+- warning if multiple matches (patch locations) are found
 
 ## wat is dis
 

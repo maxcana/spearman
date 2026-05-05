@@ -5,7 +5,7 @@ use winapi::um::{memoryapi::VirtualProtect, winnt::PAGE_EXECUTE_READWRITE};
 use crate::{ADDR, val::{NOP, TARGET}, win::{Modu, find_module}};
 
 pub static SIGCHECK: Patch<38> = Patch {
-    name: "SigCheck", address: Mutex::new(0),
+    name: "SIGCHECK", address: Mutex::new(0),
     PATTERN: [
         0xe8, 0xba, 0xca, 0x58, 0x01, 0x41, 0xb8, 0x40, 0x00, 0x00, 0x00, 0x48, 0x8d, 0x94, 0x24, 0x60,
         0x01, 0x00, 0x00, 0x48, 0x8d, 0x4c, 0x24, 0x40, 0xe8, 0x76, 0x1d, 0x6b, 0x01, 0x85, 0xc0,
@@ -23,7 +23,7 @@ pub static SIGCHECK: Patch<38> = Patch {
 };
 
 pub static WOW64PREPAREFOREXCEPTIONHOOKGATE: Patch<49> = Patch {
-    name: "Wow64PrepareForExceptionHookGate", address: Mutex::new(0),
+    name: "WOW64PREPAREFOREXCEPTIONHOOKGATE", address: Mutex::new(0),
     PATTERN: [
         0x48, 0x83, 0xcf, 0xff, 0x48, 0xb8, 0xea, 0x8e, 0x98, 0x8c, 0x10, 0xdd, 0x90, 0x43, 
         0x48, 0x3b, 0xd9,
@@ -46,6 +46,16 @@ pub static WOW64PREPAREFOREXCEPTIONHOOKGATE: Patch<49> = Patch {
     ]
 };
 
+pub static AEGISDFHCHECK: Patch<12> = Patch {
+    name: "AEGISDFHCHECK", address: Mutex::new(0),
+    PATTERN: [
+	    0x4c, 0x3b, 0xef, 0x0f, 0x95, 0xc1, 0x0f, 0x94, 0xc0, 0x88, 0x4e, 0x21
+    ],
+    REPLACEMENT: [
+        0x4d, 0x39, 0xed, 0x0f, 0x95, 0xc1, 0x0f, 0x94, 0xc0, 0x88, 0x4e, 0x21
+    ]
+};
+
 pub struct Patch <const N: usize> {
     name: &'static str,
     /// the byte pattern to search for
@@ -58,7 +68,7 @@ pub struct Patch <const N: usize> {
 static MODU_BASE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
 static MODU_SIZE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
 
-impl<const N: usize> Patch<N> {    
+impl<const N: usize> Patch<N> {
     pub unsafe fn patch(&self){ unsafe {
         info!("Patching {}...", self.name);
         info!("Scanning for signature: {:02X?}", self.PATTERN);

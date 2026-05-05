@@ -3,9 +3,6 @@ use colored::{ColoredString, Colorize};
 use winapi::um::{consoleapi::{GetConsoleMode, SetConsoleMode}, wincon::{ENABLE_VIRTUAL_TERMINAL_PROCESSING}};
 use windows::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
 
-/// this exists to block forwarded dll functions to get logged, which "presses enter" to exit.
-// static BLOCK_LOGGING: AtomicBool = AtomicBool::new(false);
-
 pub fn log(level: &str, msg: &str) {
     let mut out = std::io::stdout();
 
