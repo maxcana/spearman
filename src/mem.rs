@@ -118,18 +118,18 @@ unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) { unsafe {
     let mut old: u32 = 0;
     info!("Invoking memwrite.");
     info!("Getting access level PAGE_EXECUTE_READWRITE...");
-    if VirtualProtect(addr as _, new_bytes.len(), PAGE_EXECUTE_READWRITE, &mut old) == 0 { die!("Failed to get PAGE_EXECUTE_READWRITE access using VirtualProtect.") }
+    if VirtualProtect(addr as _, new_bytes.len(), PAGE_EXECUTE_READWRITE, &mut old) == 0 { die!("Failed to get PAGE_EXECUTE_READWRITE access using VirtualProtect. Is the address correct?") }
         // write the pattern back
         addr.copy_from_nonoverlapping(new_bytes.as_ptr(), new_bytes.len());
         info!("Replaced {} bytes with {:02X?}.", new_bytes.len(), new_bytes);
-        info!("Flushing instruction cache...");
-        FlushInstructionCache(GetCurrentProcess(), addr as _, new_bytes.len());
+        // info!("Flushing instruction cache...");
+        // FlushInstructionCache(GetCurrentProcess(), addr as _, new_bytes.len());
         info!("Reverting protection...");
     if VirtualProtect(addr as _, new_bytes.len(), old, &mut old) == 0 { error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.") };
 }}
 
 /// obtain the module info (necessary to do pattern scanning)
-pub unsafe fn init() {
+pub unsafe fn init() { 
     let modu: Modu = match find_module(TARGET) {
         Ok(info) => info,
         Err(code) => {
@@ -145,4 +145,4 @@ pub unsafe fn init() {
 
     MODU_BASE.store(modu.info.lpBaseOfDll as _, SeqCst);
     MODU_SIZE.store(modu.info.SizeOfImage as _, SeqCst);
-}
+} 

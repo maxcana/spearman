@@ -16,13 +16,11 @@ mod val; use val::*;
 mod mem; use mem::*;
 mod spy; use spy::*;
 
-static MY_HANDLE: AtomicUsize = AtomicUsize::new(0); // global var to store this DLL's handle
 // entry. "system" defines the calling convention
 #[unsafe(no_mangle)]
 unsafe extern "system" fn DllMain(handle: HINSTANCE, call_reason: DWORD, _: LPVOID) -> bool {
     match call_reason {
         DLL_PROCESS_ATTACH => unsafe {
-            MY_HANDLE.store(handle as usize, SeqCst);
             MessageBoxA(None, s!("attached"), s!("spearman.dll"), Default::default());
 
             AllocConsole();
@@ -30,9 +28,11 @@ unsafe extern "system" fn DllMain(handle: HINSTANCE, call_reason: DWORD, _: LPVO
 
             info!("Logger initialized.");
             
-            info!("Loading {}...", VERSION_DLL_NAME);
+            
             // do this immediately so version.dll calls go somewhere
+            info!("Loading {}...", VERSION_DLL_NAME);
             load_orig_dll();
+            find_all_orig();
             good!("{} loaded.", VERSION_DLL_NAME);
 
             info!("Clearing warnings.log...");
@@ -40,7 +40,6 @@ unsafe extern "system" fn DllMain(handle: HINSTANCE, call_reason: DWORD, _: LPVO
                 Ok(_) => good!("warnings.log cleared successfully."),
                 Err(code) => {
                     error!("Failed to clear warnings.log. Error #{}.", code);
-                    error!("This WILL cause the patch to fail since the spy relies on reading warnings.log.");
                 }
             }
 
@@ -104,3 +103,22 @@ forward!(VerLanguageNameA);
 forward!(VerLanguageNameW);
 forward!(VerQueryValueA);
 forward!(VerQueryValueW);
+fn find_all_orig() {
+    find_orig!(GetFileVersionInfoA);
+    find_orig!(GetFileVersionInfoByHandle);
+    find_orig!(GetFileVersionInfoExA);
+    find_orig!(GetFileVersionInfoExW);
+    find_orig!(GetFileVersionInfoSizeA);
+    find_orig!(GetFileVersionInfoSizeExA);
+    find_orig!(GetFileVersionInfoSizeExW);
+    find_orig!(GetFileVersionInfoSizeW);
+    find_orig!(GetFileVersionInfoW);
+    find_orig!(VerFindFileA);
+    find_orig!(VerFindFileW);
+    find_orig!(VerInstallFileA);
+    find_orig!(VerInstallFileW);
+    find_orig!(VerLanguageNameA);
+    find_orig!(VerLanguageNameW);
+    find_orig!(VerQueryValueA);
+    find_orig!(VerQueryValueW);
+}

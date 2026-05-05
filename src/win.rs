@@ -140,8 +140,9 @@ pub unsafe fn load_orig_dll() { unsafe {
         Err(e) => die!("[FWD] Failed to find {}. Ensure that it is in the game folder; next to this dll.", VERSION_DLL_NAME)
     }
 }}
+
 /// get the address of an export of the dll
-pub unsafe fn get_fn_addr(name: &str) -> Result<unsafe extern "system" fn() -> isize, u64> { unsafe{
+pub unsafe fn get_fn_addr(name: &str) -> Result<unsafe extern "system" fn() -> isize, u64> { unsafe {
     let name_c: CString = CString::new(name).unwrap();
     match GetProcAddress(windows::Win32::Foundation::HMODULE(H_ORIGDLL.load(SeqCst)), PCSTR(name_c.as_ptr() as _)) {
         Some(f) => Ok(f),
@@ -149,21 +150,37 @@ pub unsafe fn get_fn_addr(name: &str) -> Result<unsafe extern "system" fn() -> i
     }
 }}
 
-/// defines a function mimicking the original dll's function
-/// 
-/// ensure you call load_orig_dll to set up the handle before said function is called for the first time
 // note to self: you dont get hover documentation inside a macro.
-macro_rules! forward { ($name:ident) => {
-    #[unsafe(no_mangle)]
-    pub unsafe extern "system" fn $name() { unsafe{
+/// find the address of an export from the original dll and store it in the PTR variable of the forwarder module
+macro_rules! find_orig {
+    ($name:ident) =>  { unsafe {
         match get_fn_addr(stringify!($name)) {
             Ok(addr) => {
                 // transmute means: just convert the type please, idc about the type system
-                info!("[FWD] Forwarding {} call to {} @{:x}", stringify!($name), VERSION_DLL_NAME, addr as usize);
-                let f: unsafe extern "system" fn() = std::mem::transmute(addr);
-                f();
+                $name::PTR.store(addr as usize, SeqCst);
+                info!("[FWD] Found {} @{}.{:x}", stringify!($name), VERSION_DLL_NAME, addr as usize);
             },
-            Err(_) => {info!("[FWD] Failed to forward {} call to {}. Address of function not found.", stringify!($name), VERSION_DLL_NAME); return}
+            Err(_) => {error!("[FWD] Address of function {} not found in {}.", stringify!($name), VERSION_DLL_NAME); return}
         };
     }}
-}}
+}
+/// defines a function mimicking the original dll's function
+/// 
+/// ensure you call load_orig_dll and find_orig(fn) handle before said fn is called for the first time
+macro_rules! forward {
+    ($name:ident) => {
+        mod $name {
+            pub static PTR: std::sync::atomic::AtomicUsize = 
+                std::sync::atomic::AtomicUsize::new(0);
+        }
+        #[unsafe(no_mangle)] #[unsafe(naked)]
+        pub unsafe extern "system" fn $name() { unsafe {
+            core::arch::naked_asm!(
+                "mov rax, [rip + {rel_ptr}]",
+                "jmp rax",
+                rel_ptr = sym $name::PTR, // resolves to 
+            )
+            
+        }}
+    }
+}
