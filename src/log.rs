@@ -1,5 +1,5 @@
-use std::{io::{BufRead, Write}, ptr, sync::atomic::{AtomicBool, Ordering::SeqCst}, thread, time::Duration};
-use colored::{ColoredString, Colorize};
+use std::{io::{ Write}, thread, time::Duration};
+use colored::{Colorize};
 use winapi::um::{consoleapi::{GetConsoleMode, SetConsoleMode}, wincon::{ENABLE_VIRTUAL_TERMINAL_PROCESSING}};
 use windows::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
 
@@ -45,8 +45,8 @@ macro_rules! die {
 pub fn die_real(msg: &str) -> ! {
     log("FATAL", msg);
         
-    info!("Exiting in 10 seconds...");
-    thread::sleep(Duration::from_secs(10));
+    info!("Exiting in 15 seconds...");
+    thread::sleep(Duration::from_secs(15));
 
     // exit just this thread, not the process
     unsafe { winapi::um::processthreadsapi::ExitThread(1); }

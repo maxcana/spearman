@@ -43,7 +43,7 @@ pub unsafe fn spy() {
                     let new_lines: Vec<&str> = new.split("\n").collect();
                     new_lines.clone().into_iter().enumerate().for_each(|(i, line)| {
                         let archive_path = line.split("age of empires iv\\").nth(1).unwrap_or("?.sga").split(".sga").nth(0).unwrap_or("?").to_owned() + ".sga";
-                        let next_line: &str = if (i < new_lines.len() - 1) {new_lines[i + 1]} else {""};
+                        let next_line: &str = if (i < new_lines.len() - 1) {new_lines[i + 1]} else {return};
                         if line.contains("ARC -- ") {
                             if(next_line.contains("corrupt")) {
                                 error!("ARC -- {} failed.", archive_path)

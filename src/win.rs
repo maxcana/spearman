@@ -1,10 +1,10 @@
 // win.rs: wrapper for windows API functions
 
-use std::{default, ffi::CString, mem, ptr, str, sync::{OnceLock, atomic::{AtomicPtr, Ordering::SeqCst}}, time};
+use std::{ffi::CString, ptr, str, sync::{OnceLock, atomic::{AtomicPtr, Ordering::SeqCst}}, time};
 
 use ilhook::x64::{CallbackOption, HookFlags, HookType, Hooker, Registers};
-use winapi::{shared::windef::HWND__, um::{
-    handleapi::CloseHandle, memoryapi::VirtualProtect, processthreadsapi::*, psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO}, tlhelp32::{CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next}, wincon::GetConsoleWindow, winnt::{HANDLE, LPSTR, THREAD_SUSPEND_RESUME}
+use winapi::{um::{
+    processthreadsapi::*, psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO}, wincon::GetConsoleWindow, winnt::{LPSTR}
 }};
 use winapi::{ctypes::c_void, shared::minwindef::HMODULE};
 use windows::{Win32::{System::LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA}}, core::{PCSTR, s}};
@@ -111,74 +111,21 @@ unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFIC
     }
 }}
 
-pub unsafe fn unregister_dll_hook() { unsafe {
-    let cookie = COOKIE.load(SeqCst);
-    if cookie.is_null() { return }
-
-    let ntdll = GetModuleHandleA(s!("ntdll.dll")).unwrap();
-    let LdrUnregisterDllNotification: unsafe extern "system" fn(*mut c_void) -> i32 = std::mem::transmute( GetProcAddress(ntdll, s!("LdrUnregisterDllNotification")).unwrap() );
-    
-    LdrUnregisterDllNotification(cookie);
-
-    COOKIE.store(ptr::null_mut(), SeqCst);
-}}
-
-
 // MARK: Hooking
 unsafe extern "win64" fn false_gcw(regs: *mut Registers, ori_func_ptr:usize, _:usize) -> usize { info!("[Hook] GetConsoleWindow called, returning 0."); 0 }
 pub unsafe fn hook_console() { unsafe {
     info!("[Hook] Hooking GetConsoleWindow.");
-    if let Err(e) = Hooker::new(
+    match Hooker::new(
         GetConsoleWindow as usize,
         HookType::Retn(false_gcw),
         CallbackOption::None,
         0,
         HookFlags::empty()
     ).hook() {
-        error!("[Hook] Failed to hook GetConsoleWindow: {}.", e);
+        Err(e) => error!("[Hook] Failed to hook GetConsoleWindow: {}.", e),
+        Ok(_) => good!("[Hook] Successfully hooked GetConsoleWindow.")
     }
 }}
-
-
-// MARK: Thread pausing 
-// (not working atm) (but it isnt necessary i think, we find the pattern fast)
-
-#[deprecated = "This causes deadlocks."]
-pub unsafe fn sus_threads() -> Vec<HANDLE> { unsafe {
-    let me = GetCurrentThreadId();
-    let pid = GetCurrentProcessId();
-    let snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    let mut handles = Vec::new();
-
-    let mut entry: THREADENTRY32 = std::mem::zeroed();
-    entry.dwSize = size_of::<THREADENTRY32>() as u32;
-
-    if Thread32First(snap, &mut entry) == 0 { return handles; }
-    loop {
-        if entry.th32OwnerProcessID == pid && entry.th32ThreadID != me {
-            let handle = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
-            if !handle.is_null() {
-                if SuspendThread(handle) == 0xFFFFFFFF { error!("Failed to suspend thread: ID={} Handle={}", entry.th32ThreadID, handle as u64) }
-                else { info!("Suspended thread: ID={} Handle={}", entry.th32ThreadID, handle as u64) }
-
-                handles.push(handle);
-            }
-        }
-        if Thread32Next(snap, &mut entry) == 0 { break; }
-    }
-    CloseHandle(snap);
-    handles
-}}
-
-#[deprecated = "This causes deadlocks."]
-pub unsafe fn res_threads(handles: Vec<HANDLE>) { unsafe {
-    for handle in handles {
-        if ResumeThread(handle) == 0xFFFFFFFF { error!("Failed to resume thread: Handle={}", handle as u64) }
-        else { info!("Resumed thread: Handle={}", handle as u64); }
-        CloseHandle(handle);
-    }
-}}
-
 
 // MARK: Forwarder
 // interacting with the windows API through rust is incredibly painful

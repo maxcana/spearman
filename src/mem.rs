@@ -1,8 +1,9 @@
 // mem.rs: pattern scanning and function patching
 
-use std::{cell::Cell, ptr, slice, sync::{Mutex, atomic::{AtomicPtr, Ordering::SeqCst}}, time::Instant};
-use winapi::um::{memoryapi::VirtualProtect, winnt::PAGE_EXECUTE_READWRITE};
-use crate::{ADDR, val::{NOP, TARGET}, win::{Modu, find_module}};
+use std::{ptr, slice, sync::{Mutex, atomic::{AtomicPtr, Ordering::SeqCst}}, time::Instant};
+use memchr::memmem;
+use winapi::um::{memoryapi::VirtualProtect, processthreadsapi::{FlushInstructionCache, GetCurrentProcess}, winnt::{PAGE_EXECUTE_READWRITE, PAGE_READWRITE}};
+use crate::{val::{NOP, TARGET}, win::{Modu, find_module}};
 
 pub static SIGCHECK: Patch<38> = Patch {
     name: "SIGCHECK", address: Mutex::new(0),
@@ -71,19 +72,13 @@ static MODU_SIZE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
 impl<const N: usize> Patch<N> {
     pub unsafe fn patch(&self){ unsafe {
         info!("Patching {}...", self.name);
-        info!("Scanning for signature: {:02X?}", self.PATTERN);
-        // info!("Suspending other threads...");
-        // let handles = sus_threads();
-        let past: Instant = Instant::now();
+        
         let addr = scan(&self.PATTERN, MODU_BASE.load(SeqCst), MODU_SIZE.load(SeqCst) as usize);
-        good!("Pattern matched at address 0x{:x} in {}ms.", addr as u64, past.elapsed().as_millis());
+        
         memwrite(addr, &self.REPLACEMENT);
         good!("Patch {} complete!", self.name);
 
         *self.address.lock().unwrap() = addr as usize;
-
-        // info!("Resuming other threads...");
-        // res_threads(handles);
     }}
     pub unsafe fn revert(&self) { unsafe {
         let addr = self.address.lock().unwrap().clone() as *mut u8;
@@ -93,22 +88,30 @@ impl<const N: usize> Patch<N> {
         good!("Patch reverted! Memory is clean.");
     }}
 }
-/// brute force scanning method. *mut u8 is a byte pointer
-/// 
+
 /// returns: pointer to first byte of pattern
 fn scan(pattern: &[u8], first_byte: *mut u8, bytes: usize) -> *mut u8 { unsafe {
-    let slice = slice::from_raw_parts(first_byte, bytes); // slice into a big array
-    let len = pattern.len();
+    info!("Scanning for signature: {:02X?}", pattern);
 
-    for i in 0..=bytes-len {
-        if &slice[i..i + len] == pattern {
-            return first_byte.add(i);
+    let slice = slice::from_raw_parts(first_byte, bytes); // slice into a big array
+    let past: Instant = Instant::now();
+    let locs: Vec<usize> = memmem::Finder::new(pattern).find_iter(slice).map(|loc| loc + (first_byte as usize)).collect();
+
+    match locs.len() {
+        0 => {
+            error!("Could not find pattern. Searched {} B.", bytes);
+            error!("Either the pattern or DLL load order has been changed. This may be due to a game update.");
+            die!("Pattern not found.")
+        }
+        1 => {
+            good!("Pattern matched at address 0x{:x} in {}ms.", locs[0], past.elapsed().as_millis());
+            locs[0] as *mut u8
+        },
+        _ => {
+            error!("{} matches found at: {:02X?} in {}ms. This is unexpected; pattern is likely not specific enough.", locs.len(), locs, past.elapsed().as_millis());
+            die!("Multiple pattern matches found.")
         }
     }
-
-    error!("Could not find pattern. Searched {} B.", bytes);
-    error!("Either the pattern or DLL load order has been changed. This may be due to a game update.");
-    die!("Pattern not found.")
 }}
 /// write new bytes, automatically handle VirtualProtect calls
 unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) { unsafe {
@@ -119,6 +122,8 @@ unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) { unsafe {
         // write the pattern back
         addr.copy_from_nonoverlapping(new_bytes.as_ptr(), new_bytes.len());
         info!("Replaced {} bytes with {:02X?}.", new_bytes.len(), new_bytes);
+        info!("Flushing instruction cache...");
+        FlushInstructionCache(GetCurrentProcess(), addr as _, new_bytes.len());
         info!("Reverting protection...");
     if VirtualProtect(addr as _, new_bytes.len(), old, &mut old) == 0 { error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.") };
 }}
