@@ -11,6 +11,7 @@ Bypass SGA verification™
 # todo
 
 - patch somewhere else, allowing NoSig archives as well as FakeSig
+- update readme
 
 ## wat is dis
 
