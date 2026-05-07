@@ -8,31 +8,34 @@
 
 Bypass SGA verification™
 
-# todo
+## what is this
 
-- patch somewhere else, allowing NoSig archives as well as FakeSig
-- update readme
+A library that scans module memory space and patches assembly instructions to enable loading unsigned .sga files in Age of Empires 4, with a focus on simplistic code!
 
-## wat is dis
+This allows greater modding possibilities, as you can patch core game features that the in-game modding tools don't let you. Theoretically this allows you to do things such as create entirely new civilizations, modify any game code you desire, modify the game's UI, etc.
 
-a library that scans module memory space and patches 5 assembly instructions to enable loading unsigned .sga files in Age of Empires 4. with a focus on simplistic code!
+<br>
 
-this allows greater modding possibilities, as you can patch core game features that the in-game modding tools don't let you.
+# 🔧 usage
 
-## why does dis exist
+Here's an example use case and why I built this in the first place.
 
-here's an example use case and why I built this in the first place.
+You know The Crucible? The roguelite gamemode where you have to fight against waves of enemies to survive?
 
-you know The Crucible? the roguelite gamemode where you have to fight against waves of enemies to survive?
+**I thought it was quite fun, but also that it would be more fun if you could build walls.**
 
-#### I thought it was quite fun, but it would be funner if you could build walls.
+## 1. build a mod
 
-### 0.
+Use the in-game content editor.
 
-build a mod using the in-game content editor that contains game files you want to patch (for me `Data.sga/data/scar/rogue/rogue_factions.scar`)
+- "Create A New Mod" → "Empty Extension" → give it a name like `AmogUs`
+  - delete unnecessary `locdb\`, `mod.png`, `mod.rdo`
+  - add `scar\rogue\rogue_factions.scar`
+- File → Open → `steamapps\common\Age of Empires IV\cardinal\archives\Data.sga`
 
-- in your Empty Mod, put `scar/rogue/rogue_factions.scar`, and copy the contents of the actual file
-- make the patches you want (for me, commenting out the below)
+- Copy the contents of the actual `rogue_factions.scar` file into our own
+
+- Make the patches you want (for me, commenting out the below)
 
 ```lua
 local removed_types = {
@@ -44,50 +47,115 @@ local removed_types = {
 }
 ```
 
-- build the mod, take the .sga file from `/archives/crucible_walls.sga` under the mod folder.
+- This will overwrite the original `rogue_factions.scar`
 
-## ❓ hwo to use dis
+- Build the mod, take the .sga file from `\archives\AmogUs.sga` under the mod folder
 
-so you have an unsigned sga file you want to load; how?
+### 1.1. give it a fake signature
 
-### 1.
+- Open your sga file in any [hex editor](https://hexed.it/)
+- Edit any signature bytes (ex. byte `0x1AB` (the final `00` before other numbers) from `00` → `43`)
+- Save your modified archive
 
-put the sga in the load order.
+So now you have an unsigned sga file you want to load; how?
 
-- go to your game folder `C:\Program Files (x86)\Steam\steamapps\common\Age of Empires IV`, then open `RelicGame.module`
-- add the following to the end:
+## 2. put the sga in the load order
+
+- Go to your game folder `C:\Program Files (x86)\Steam\steamapps\common\Age of Empires IV`, then open `RelicGame.module`
+- Add the following to the end:
 
 ```ini
 [data:common:12]
 required = 1
 archiveRoot = cardinal\archives
-archive.01 = crucible_walls
+archive.01 = AmogUs
 ```
 
-- place `crucible_walls.sga` in `/cardinal/archives`
+- Place `AmogUs.sga` in `\cardinal\archives`
 
-### 2.
+## 3. inject spearman
 
-inject spearman.
+- Rename `spearman.dll` to `version.dll`
+- Place it in your game folder (the one with `RelicCardinal.exe`)
+- Copy `C:\Windows\System32\version.dll`, rename it to `version_orig.dll`, move it to the game folder (next to `version.dll`)
 
-- rename `spearman.dll` to `version.dll`
-- place it in your game folder (the one with `RelicCardinal.exe`)
-- copy `C:\Windows\System32\version.dll`, rename it to `version_orig.dll`, move it to the game folder (next to `version.dll`)
+The game will run `version.dll` thinking it's a normal DLL.
 
-the game will run `version.dll` thinking it's a normal DLL, but it's actually just an imposter: `spearman.dll`.
+Whenever the game calls a function that `version.dll` normally contains, we forward it to `version_orig.dll` so all the functions work.
 
-whenever the game calls a function that `version.dll` normally contains, we forward it to `version_orig.dll` so all the functions work.
+If successfully injected, you should see a message box that says "attached".
 
-### 3.
+## 4.
 
-to uninstall spearman, delete `version.dll` and `version_orig.dll` from your game folder
+To uninstall spearman, delete `version.dll` and `version_orig.dll` from your game folder.
 
-## ❓ how dis progwam work
+Use Steam file integrity check to repair `RelicGame.module`.
 
-AoE4 packs its code, thus making it more difficult to hook, as the code is complete garbage.
+<br>
 
-spearman gets around this by patching the function right after it has been unpacked, but right before it is called.
+## side effects
 
-this is done by waiting for a specific DLL to load, and executing code before DllMain by using `ntdll.LdrRegisterDllNotification`.
+\* _These side effects are easily fixable, let me know if it's too annoying._
 
-#### TLDR; all this program does is replace `0F94C0EB0232C0` with `B00190EB02B001`
+1. After editing `RelicGame.module`, Steam may grief you and trigger "game files integrity verification". To bypass this:
+   - Just wait for it to finish repairing
+   - Then edit `RelicGame.module` again and boot the game
+   - It won't bother you until you next edit `RelicGame.module`
+
+2. When using unsigned archives, the content editor will not work
+   - If you check `EssenceEditor.log` you will see why; it doesn't like our archives.
+   - To use the content editor, simply remove the unsigned archive from `RelicGame.module` and boot the content editor again.
+
+<br>
+
+# ❓ FAQ
+
+### modding tips?
+
+---
+
+You can use this to modify any game files you want.
+
+Check `_default.burnproj` to see what files the content editor natively supports burning into your `.sga`.
+
+I haven't experimented with all the possibilities yet, but all scar (official maps, crucible code and boons, ai logic, art of wars, basically all game code) / attrib / data / ui / localization should be easy.
+
+Try opening official archives like `Data.sga`, `UI.sga`, `Scenario.sga`,
+
+For unsupported files, you may have to understand the format and burn it into your sga (which is not as easy).
+
+### why did you make this
+
+---
+
+1. out of love for the game
+2. to give modders more power, because yall saying "modding is dead"
+3. i wanted walls in Crucible
+
+### is this a virus
+
+---
+
+compile it yourself
+
+### can i use this to cheat in multiplayer
+
+---
+
+It will probably cause a desync.
+
+That said, if both you and your opponent load the same unsigned archive, it won't desync (this is how official mods work).
+
+### im having X issue / i have Y question
+
+---
+
+make an issue
+
+<br>
+
+# 🐑 fin
+
+leave a star if you enjoy.
+
+contact me on discord `@acascadian` if required
