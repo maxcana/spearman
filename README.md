@@ -12,7 +12,7 @@ Bypass SGA verification™
 
 A library that scans module memory space and patches assembly instructions to enable loading unsigned .sga files in Age of Empires 4, with a focus on simplistic code!
 
-This allows greater modding possibilities, as you can patch core game features that the in-game modding tools don't let you. Theoretically this allows you to do things such as create entirely new civilizations, modify any game code you desire, modify the game's UI, etc.
+This allows greater modding possibilities, as you can patch core game features that the in-game modding tools don't let you. Theoretically this allows you to do things such as create entirely new civilizations, modify any game code you desire, modify the game's UI, [etc](#modding-tips).
 
 <br>
 
@@ -22,7 +22,7 @@ Here's an example use case and why I built this in the first place.
 
 You know The Crucible? The roguelite gamemode where you have to fight against waves of enemies to survive?
 
-**I thought it was quite fun, but also that it would be more fun if you could build walls.**
+**I thought it was quite fun, but it would be more fun if you could build walls.**
 
 ## 1. build a mod
 
@@ -52,8 +52,6 @@ local removed_types = {
 - Build the mod, take the .sga file from `\archives\AmogUs.sga` under the mod folder
 
 ### 1.1. give it a fake signature
-
----
 
 - Open your sga file in any [hex editor](https://hexed.it/)
 - Edit any signature bytes (ex. byte `0x1AB` (the final `00` before other numbers) from `00` → `43`)
@@ -91,7 +89,7 @@ If successfully injected, you should see a message box that says "attached".
 
 To uninstall spearman, delete `version.dll` and `version_orig.dll` from your game folder.
 
-Use Steam file integrity check to automatically repair `RelicGame.module`.
+Use Steam's file integrity check to automatically repair `RelicGame.module`.
 
 <br>
 
@@ -114,43 +112,33 @@ Use Steam file integrity check to automatically repair `RelicGame.module`.
 
 ### modding tips?
 
----
-
 You can use this to modify any game files you want.
 
 Check `_default.burnproj` to see what files the content editor natively supports burning into your `.sga`.
 
 I haven't experimented with all the possibilities yet, but all scar (official maps, crucible code and boons, ai logic, art of wars, basically all game code) / attrib / data / ui / localization should be easy.
 
-Try opening official archives like `Data.sga`, `UI.sga`, `Scenario.sga`,
+Try opening official archives like `Data.sga`, `UI.sga`, `Scenario.sga` to see what stuff you can change!
 
 For unsupported files, you may have to understand the format and burn it into your sga (which is not as easy).
 
 ### why did you make this
 
----
-
 1. out of love for the game
-2. to give modders more power, because yall saying "modding is dead"
+2. to give modders more power, because y'all saying "modding is dead"
 3. i wanted walls in Crucible
 
 ### is this a virus
 
----
-
 compile it yourself
 
 ### can i use this to cheat in multiplayer
-
----
 
 It will probably cause a desync.
 
 That said, if both you and your opponent load the same unsigned archive, it won't desync (this is how official mods work).
 
 ### im having X issue / i have Y question
-
----
 
 make an issue
 
