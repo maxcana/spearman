@@ -53,6 +53,8 @@ local removed_types = {
 
 ### 1.1. give it a fake signature
 
+---
+
 - Open your sga file in any [hex editor](https://hexed.it/)
 - Edit any signature bytes (ex. byte `0x1AB` (the final `00` before other numbers) from `00` → `43`)
 - Save your modified archive
@@ -89,7 +91,7 @@ If successfully injected, you should see a message box that says "attached".
 
 To uninstall spearman, delete `version.dll` and `version_orig.dll` from your game folder.
 
-Use Steam file integrity check to repair `RelicGame.module`.
+Use Steam file integrity check to automatically repair `RelicGame.module`.
 
 <br>
 

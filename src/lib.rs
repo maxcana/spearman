@@ -73,7 +73,6 @@ pub unsafe fn on_dll() { unsafe{
 
     mem::init();
     SIGCHECK.patch();
-    WOW64PREPAREFOREXCEPTIONHOOKGATE.patch();
     AEGISDFHCHECK.patch();
 
     info!("Starting spy thread...");
