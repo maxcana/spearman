@@ -1,6 +1,8 @@
 // spy.rs: spies on the warnings.log file
 
-use std::{io::{Read, Seek}, path::PathBuf, time::Duration};
+use std::{io::{Read, Seek}, path::PathBuf, thread, time::Duration};
+
+use winapi::um::wincon::FreeConsole;
 
 fn get_log_path() -> Result<PathBuf, u64> {
     let userdir = match std::env::var("USERPROFILE") {
@@ -45,7 +47,7 @@ pub unsafe fn spy() {
                         let archive_path = line.split("age of empires iv\\").nth(1).unwrap_or("?.sga").split(".sga").nth(0).unwrap_or("?").to_owned() + ".sga";
                         let next_line: &str = if (i < new_lines.len() - 1) {new_lines[i + 1]} else {return};
                         if line.contains("ARC -- ") {
-                            if(next_line.contains("corrupt")) {
+                            if next_line.contains("corrupt") {
                                 error!("ARC -- {} failed.", archive_path)
                             } else {
                                 good!("ARC -- {} passed.", archive_path)
@@ -53,13 +55,23 @@ pub unsafe fn spy() {
                         }
                         if line.contains("Loading step: [Localization]") {
                             info!("Detected localization step.");
-                            unsafe { crate::on_archives_loaded(); return; }
+                            unsafe { crate::on_archives_loaded(); return }
                         }
                     });
                 },
                 Err(_) => error!("Spy failed to read from warnings.log.")
             }
-        } else { error!("Spy failed to open warnings.log.") };
+        } else {
+            error!("Spy failed to open warnings.log.");
+            info!("Warnings.log may not be located in the default location.");
+            info!("Patches should still work, but no pretty logs.");
+            info!("Triggering early exit to avoid detection!");
+            unsafe { 
+                thread::sleep(std::time::Duration::from_secs(4));
+                FreeConsole();
+                return;
+            };
+        };
         std::thread::sleep(Duration::from_millis(10));
     }
 }
