@@ -5,10 +5,10 @@ use memchr::memmem;
 use winapi::um::{memoryapi::VirtualProtect, processthreadsapi::{FlushInstructionCache, GetCurrentProcess}, winnt::{PAGE_EXECUTE_READWRITE, PAGE_READWRITE}};
 use crate::{val::{NOP, TARGET}, win::{Modu, find_module}};
 
-pub static SIGCHECK: Patch<22> = Patch {
+pub static SIGCHECK: Patch<17> = Patch {
     name: "SIGCHECK", address: Mutex::new(0),
     PATTERN: [
-        0xE8, 0xFC, 0x96, 0x6A, 0x01,
+        // 0xE8, 0xFC, 0x96, 0x6A, 0x01,
         0x85, 0xC0,
         0x0F, 0x94, 0xC0,
         0xEB, 0x02,
@@ -16,7 +16,7 @@ pub static SIGCHECK: Patch<22> = Patch {
         0x4C, 0x8D, 0x9C, 0x24, 0x60, 0x02, 0x00, 0x00
     ],
     REPLACEMENT: [
-        0xE8, 0xFC, 0x96, 0x6A, 0x01,
+        // 0xE8, 0xFC, 0x96, 0x6A, 0x01,
         0x85, 0xC0,
         NOP, 0xB0, 0x01, // mov al, 1
         0xEB, 0x02,
