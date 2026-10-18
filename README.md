@@ -110,6 +110,28 @@ Use Steam's file integrity check to automatically repair `RelicGame.module`.
 
 # ❓ FAQ
 
+### installing `google_translate.sga`
+you can skip step 1 since the mod is already built. follow just step 2 and 3, except at step 2:
+
+instead of adding a new entry `[data:common:12]`, replace:
+```ini
+[locale:en]
+archiveRoot = cardinal\archives
+archive.01 = LocaleEnglish
+archive.01.otaPatch = LocaleEnglish
+```
+
+with:
+```ini
+[locale:en]
+archiveRoot = cardinal\archives
+archive.01 = google_translate
+archive.01.otaPatch = LocaleEnglish
+```
+- Place `google_translate.sga` in `\cardinal\archives`
+
+then follow step 3 as normal.
+
 ### modding tips?
 
 You can use this to modify any game files you want.
