@@ -20,7 +20,7 @@ pub struct Modu {
 // MARK: find_module
 // HMODULE = u64
 /// Find module and its info by name. Searches up to 1000 modules under the process this dll is attached to.
-pub unsafe fn find_module(target: &str) -> Result<Modu, u8> { unsafe {
+pub unsafe fn find_module(target: &str) -> Result<Modu, u8> {
     info!("Searching for target: {}.", target);
     let EIGHT = std::mem::size_of::<HMODULE>() as u32;
 
@@ -52,7 +52,7 @@ pub unsafe fn find_module(target: &str) -> Result<Modu, u8> { unsafe {
         }
     }
     error!("Searched through {} modules; failed to find {}.", lpcb_needed / EIGHT, target); Err(2)
-}}
+}
 
 
 
@@ -87,7 +87,7 @@ static COOKIE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 static PAST: OnceLock<time::Instant> = OnceLock::new(); // global instant
 
 /// calls crate::on_dll() when PATCH_AT_DLL loads
-pub unsafe fn register_dll_hook() { unsafe {
+pub unsafe fn register_dll_hook() {
     let ntdll = GetModuleHandleA(s!("ntdll.dll")).unwrap();
     let LdrRegisterDllNotification: unsafe extern "system" fn(u32, LdrDllNotificationFn, *mut c_void, *mut *mut c_void) -> i32 = std::mem::transmute(GetProcAddress(ntdll, s!("LdrRegisterDllNotification")).unwrap());
     
@@ -97,9 +97,9 @@ pub unsafe fn register_dll_hook() { unsafe {
     LdrRegisterDllNotification(0, dll_callback, std::ptr::null_mut(), &mut cookie);
     COOKIE.store(cookie, SeqCst); // SeqCst = no compiler reordering operaions
     PAST.set(time::Instant::now()).unwrap();
-}}
+}
 
-unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFICATION_DATA, _context: *mut c_void) { unsafe {
+unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFICATION_DATA, _context: *mut c_void) {
     if reason != LDR_DLL_NOTIFICATION_REASON_LOADED { return }
 
     let name_us = &*(*data).Loaded.BaseDllName;
@@ -109,11 +109,11 @@ unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFIC
         info!("{} loaded in {}ms.", PATCH_AT_DLL, PAST.get().unwrap().elapsed().as_millis());
         crate::on_dll();
     }
-}}
+}
 
 // MARK: Hooking
 unsafe extern "win64" fn false_gcw(regs: *mut Registers, ori_func_ptr:usize, _:usize) -> usize { info!("[Hook] GetConsoleWindow called, returning 0."); 0 }
-pub unsafe fn hook_console() { unsafe {
+pub unsafe fn hook_console() {
     info!("[Hook] Hooking GetConsoleWindow.");
     match Hooker::new(
         GetConsoleWindow as usize,
@@ -125,7 +125,7 @@ pub unsafe fn hook_console() { unsafe {
         Err(e) => error!("[Hook] Failed to hook GetConsoleWindow: {}.", e),
         Ok(_) => good!("[Hook] Successfully hooked GetConsoleWindow.")
     }
-}}
+}
 
 // MARK: Forwarder
 // interacting with the windows API through rust is incredibly painful
@@ -133,27 +133,27 @@ pub unsafe fn hook_console() { unsafe {
 /// global var: handle to original dll
 static H_ORIGDLL: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(ptr::null_mut());
 
-pub unsafe fn load_orig_dll() { unsafe {
+pub unsafe fn load_orig_dll() {
     let name_c = CString::new(VERSION_DLL_NAME).unwrap();
     match LoadLibraryA(PCSTR(name_c.as_ptr() as _)) {
         Ok(handle) => H_ORIGDLL.store(handle.0, SeqCst),
         Err(e) => die!("[FWD] Failed to find {}. Ensure that it is in the game folder; next to this dll.", VERSION_DLL_NAME)
     }
-}}
+}
 
 /// get the address of an export of the dll
-pub unsafe fn get_fn_addr(name: &str) -> Result<unsafe extern "system" fn() -> isize, u64> { unsafe {
+pub unsafe fn get_fn_addr(name: &str) -> Result<unsafe extern "system" fn() -> isize, u64> {
     let name_c: CString = CString::new(name).unwrap();
     match GetProcAddress(windows::Win32::Foundation::HMODULE(H_ORIGDLL.load(SeqCst)), PCSTR(name_c.as_ptr() as _)) {
         Some(f) => Ok(f),
         None => { error!("[FWD] Can't find address of {} in {}.", name, VERSION_DLL_NAME); Err(1) }
     }
-}}
+}
 
 // note to self: you dont get hover documentation inside a macro.
 /// find the address of an export from the original dll and store it in the PTR variable of the forwarder module
 macro_rules! find_orig {
-    ($name:ident) =>  { unsafe {
+    ($name:ident) =>  {
         match get_fn_addr(stringify!($name)) {
             Ok(addr) => {
                 // transmute means: just convert the type please, idc about the type system
@@ -162,7 +162,7 @@ macro_rules! find_orig {
             },
             Err(_) => {error!("[FWD] Address of function {} not found in {}.", stringify!($name), VERSION_DLL_NAME); return}
         };
-    }}
+    }
 }
 /// defines a function mimicking the original dll's function
 /// 
@@ -174,13 +174,12 @@ macro_rules! forward {
                 std::sync::atomic::AtomicUsize::new(0);
         }
         #[unsafe(no_mangle)] #[unsafe(naked)]
-        pub unsafe extern "system" fn $name() { unsafe {
+        pub unsafe extern "system" fn $name() {
             core::arch::naked_asm!(
                 "mov rax, [rip + {rel_ptr}]",
                 "jmp rax",
                 rel_ptr = sym $name::PTR, // resolves to 
             )
-            
-        }}
+        }
     }
 }

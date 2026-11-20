@@ -15,7 +15,7 @@ pub fn log(level: &str, msg: &str) {
     };
 }
 
-pub unsafe fn init_logger() { unsafe {
+pub unsafe fn init_logger() {
     // enable ANSI
     let handle = match GetStdHandle(STD_OUTPUT_HANDLE) {
         Ok(h) => h,
@@ -28,7 +28,7 @@ pub unsafe fn init_logger() { unsafe {
     std::panic::set_hook(Box::new(|info| { 
         log("FATAL", &format!("PANIC: {}", info)); 
     }));
-}}
+}
 
 macro_rules! info { ($($arg:tt)*) => { crate::log::log("INFO", &format!($($arg)*)) } }
 macro_rules! good { ($($arg:tt)*) => { crate::log::log("SUCCESS", &format!($($arg)*)) } }

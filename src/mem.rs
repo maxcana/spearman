@@ -25,15 +25,36 @@ pub static SIGCHECK: Patch<17> = Patch {
     ]
 };
 
-pub static AEGISDFHCHECK: Patch<12> = Patch {
-    name: "AEGISDFHCHECK", address: Mutex::new(0),
+// like in build Yue Fei's Legacy
+pub static AEGISDFHCHECK_TYPE1: Patch<9> = Patch {
+    name: "AEGISDFHCHECK_TYPE1", address: Mutex::new(0),
     PATTERN: [
-	    0x4c, 0x3b, 0xef, 0x0f, 0x95, 0xc1, 0x0f, 0x94, 0xc0, 0x88, 0x4e, 0x21
+        0x0f, 0x95, 0xc1, // setne  cl
+        0x0f, 0x94, 0xc0, // sete   al
+        0x88, 0x4e, 0x21, // mov    BYTE PTR [rsi+0x21],cl
     ],
     REPLACEMENT: [
-        0x4d, 0x39, 0xed, 0x0f, 0x95, 0xc1, 0x0f, 0x94, 0xc0, 0x88, 0x4e, 0x21
+        0xB0, 0x01, NOP, // mov al, 1
+        0xB1, 0x00, NOP, // mov cl, 0
+        0x88, 0x4e, 0x21,
     ]
 };
+
+// like in build 2026-11-09
+pub static AEGISDFHCHECK_TYPE2: Patch<9> = Patch {
+    name: "AEGISDFHCHECK_TYPE2", address: Mutex::new(0),
+    PATTERN: [
+        0x0f, 0x94, 0xc0, // sete   al
+        0x0f, 0x95, 0xc1, // setne  cl
+        0x88, 0x4e, 0x21, // mov    BYTE PTR [rsi+0x21],cl
+    ],
+    REPLACEMENT: [
+        0xB0, 0x01, NOP, // mov al, 1
+        0xB1, 0x00, NOP, // mov cl, 0
+        0x88, 0x4e, 0x21,
+    ]
+};
+
 
 pub struct Patch <const N: usize> {
     name: &'static str,
@@ -48,7 +69,7 @@ static MODU_BASE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
 static MODU_SIZE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
 
 impl<const N: usize> Patch<N> {
-    pub unsafe fn patch(&self){ unsafe {
+    pub unsafe fn patch(&self){
         info!("Patching {}...", self.name);
         
         let addr = scan(&self.PATTERN, MODU_BASE.load(SeqCst), MODU_SIZE.load(SeqCst) as usize);
@@ -57,18 +78,18 @@ impl<const N: usize> Patch<N> {
         good!("Patch {} complete!", self.name);
 
         *self.address.lock().unwrap() = addr as usize;
-    }}
-    pub unsafe fn revert(&self) { unsafe {
+    }
+    pub unsafe fn revert(&self) {
         let addr = self.address.lock().unwrap().clone() as *mut u8;
 
         info!("Reverting patch {} @{:x}...", self.name, addr as u64);
         memwrite(addr, &self.PATTERN);
         good!("Patch reverted! Memory is clean.");
-    }}
+    }
 }
 
 /// returns: pointer to first byte of pattern
-fn scan(pattern: &[u8], first_byte: *mut u8, bytes: usize) -> *mut u8 { unsafe {
+unsafe fn scan(pattern: &[u8], first_byte: *mut u8, bytes: usize) -> *mut u8 {
     info!("Scanning for signature: {:02X?}", pattern);
 
     let slice = slice::from_raw_parts(first_byte, bytes); // slice into a big array
@@ -90,9 +111,9 @@ fn scan(pattern: &[u8], first_byte: *mut u8, bytes: usize) -> *mut u8 { unsafe {
             die!("Multiple pattern matches found.")
         }
     }
-}}
+}
 /// write new bytes, automatically handle VirtualProtect calls
-unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) { unsafe {
+unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) {
     let mut old: u32 = 0;
     info!("Invoking memwrite.");
     info!("Getting access level PAGE_EXECUTE_READWRITE...");
@@ -104,7 +125,7 @@ unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) { unsafe {
         // FlushInstructionCache(GetCurrentProcess(), addr as _, new_bytes.len());
         info!("Reverting protection...");
     if VirtualProtect(addr as _, new_bytes.len(), old, &mut old) == 0 { error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.") };
-}}
+}
 
 /// obtain the module info (necessary to do pattern scanning)
 pub unsafe fn init() { 

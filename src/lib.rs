@@ -1,3 +1,5 @@
+#![allow(unsafe_op_in_unsafe_fn, non_snake_case)]
+
 use windows::Win32::{ System::{SystemServices::*}, UI::WindowsAndMessaging::MessageBoxA };
 use windows::core::*;
 
@@ -54,7 +56,7 @@ unsafe extern "system" fn DllMain(handle: HINSTANCE, call_reason: DWORD, _: LPVO
 
 
 // actual code below
-unsafe fn begin() { unsafe {
+unsafe fn begin() {
     info!("Worker thread initialized.");
 
     match SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) {
@@ -66,9 +68,9 @@ unsafe fn begin() { unsafe {
 
     info!("Waiting for code to unpack...");
     win::register_dll_hook(); // wait until dll loads 
-}} 
+} 
 
-pub unsafe fn on_dll() { unsafe{
+pub unsafe fn on_dll() {
     info!("Assuming unpacking is complete.");
 
     mem::init();
@@ -77,16 +79,16 @@ pub unsafe fn on_dll() { unsafe{
 
     info!("Starting spy thread...");
     std::thread::spawn(|| { spy(); }); // wait for spy.rs to tell us on_archives_loaded()
-}}
+}
 
-pub unsafe fn on_archives_loaded() { unsafe {
+pub unsafe fn on_archives_loaded() {
     good!("All archives loaded!");
     good!("Have fun! :D");
 
     info!("This console will automatically close in 2 seconds to avoid detection.");
     thread::sleep(std::time::Duration::from_secs(2));
     FreeConsole();
-}}
+}
 
 
 // MARK: Forwarding
@@ -108,7 +110,7 @@ forward!(VerLanguageNameA);
 forward!(VerLanguageNameW);
 forward!(VerQueryValueA);
 forward!(VerQueryValueW);
-fn find_all_orig() {
+unsafe fn find_all_orig() {
     find_orig!(GetFileVersionInfoA);
     find_orig!(GetFileVersionInfoByHandle);
     find_orig!(GetFileVersionInfoExA);
