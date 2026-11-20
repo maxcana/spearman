@@ -1,22 +1,32 @@
 #![allow(unsafe_op_in_unsafe_fn, non_snake_case)]
 
-use windows::Win32::{ System::{SystemServices::*}, UI::WindowsAndMessaging::MessageBoxA };
+use windows::Win32::{System::SystemServices::*, UI::WindowsAndMessaging::MessageBoxA};
 use windows::core::*;
 
 use winapi::um::{processthreadsapi::GetThreadPriority, wincon::FreeConsole};
 use winapi::{
     shared::minwindef::{DWORD, HINSTANCE, LPVOID},
-    um::{consoleapi::AllocConsole, processthreadsapi::{GetCurrentThread, SetThreadPriority}},
+    um::{
+        consoleapi::AllocConsole,
+        processthreadsapi::{GetCurrentThread, SetThreadPriority},
+    },
 };
 
-use std::{sync::atomic::{AtomicUsize, Ordering::SeqCst}};
-use std::{thread::{self}};
+use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+use std::thread::{self};
 // modules
-#[macro_use] mod log; use log::*;
-#[macro_use] mod win; use win::*;
-mod val; use val::*;
-mod mem; use mem::*;
-mod spy; use spy::*;
+#[macro_use]
+mod log;
+use log::*;
+#[macro_use]
+mod win;
+use win::*;
+mod val;
+use val::*;
+mod mem;
+use mem::*;
+mod spy;
+use spy::*;
 
 // entry. "system" defines the calling convention
 #[unsafe(no_mangle)]
@@ -26,12 +36,11 @@ unsafe extern "system" fn DllMain(handle: HINSTANCE, call_reason: DWORD, _: LPVO
             MessageBoxA(None, s!("attached"), s!("spearman.dll"), Default::default());
 
             AllocConsole();
-            
+
             init_logger();
 
             info!("Logger initialized.");
-            
-            
+
             // do this immediately so version.dll calls go somewhere
             info!("Loading {}...", VERSION_DLL_NAME);
             load_orig_dll();
@@ -48,12 +57,11 @@ unsafe extern "system" fn DllMain(handle: HINSTANCE, call_reason: DWORD, _: LPVO
 
             // do stuff in other thread so we don't freeze process (return from DllMain immediately)
             thread::spawn(|| begin());
-        }
+        },
         _ => (),
     }
     true
 }
-
 
 // actual code below
 unsafe fn begin() {
@@ -61,24 +69,25 @@ unsafe fn begin() {
 
     match SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) {
         0 => error!("Failed to set thread priority to {}.", THREAD_PRIORITY_TIME_CRITICAL),
-        _ => good!("Thread priority set to {}.", GetThreadPriority(GetCurrentThread()))
+        _ => good!("Thread priority set to {}.", GetThreadPriority(GetCurrentThread())),
     }
 
     win::hook_console();
 
     info!("Waiting for code to unpack...");
     win::register_dll_hook(); // wait until dll loads 
-} 
+}
 
 pub unsafe fn on_dll() {
     info!("Assuming unpacking is complete.");
 
     mem::init();
-    SIGCHECK.patch();
-    AEGISDFHCHECK.patch();
+    mem::patch_shit();
 
     info!("Starting spy thread...");
-    std::thread::spawn(|| { spy(); }); // wait for spy.rs to tell us on_archives_loaded()
+    std::thread::spawn(|| {
+        spy();
+    }); // wait for spy.rs to tell us on_archives_loaded()
 }
 
 pub unsafe fn on_archives_loaded() {
@@ -89,7 +98,6 @@ pub unsafe fn on_archives_loaded() {
     thread::sleep(std::time::Duration::from_secs(2));
     FreeConsole();
 }
-
 
 // MARK: Forwarding
 // define the same functions as the dll we are mimicking
