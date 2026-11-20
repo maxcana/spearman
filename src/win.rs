@@ -4,7 +4,7 @@ use std::{ffi::CString, ptr, str, sync::{OnceLock, atomic::{AtomicPtr, Ordering:
 
 use ilhook::x64::{CallbackOption, HookFlags, HookType, Hooker, Registers};
 use winapi::{um::{
-    processthreadsapi::*, psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO}, wincon::GetConsoleWindow, winnt::{LPSTR}
+    processthreadsapi::*, psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO}, winnt::{LPSTR}
 }};
 use winapi::{ctypes::c_void, shared::minwindef::HMODULE};
 use windows::{Win32::{System::LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA}}, core::{PCSTR, s}};
@@ -115,6 +115,10 @@ unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFIC
 unsafe extern "win64" fn false_gcw(regs: *mut Registers, ori_func_ptr:usize, _:usize) -> usize { info!("[Hook] GetConsoleWindow called, returning 0."); 0 }
 pub unsafe fn hook_console() {
     info!("[Hook] Hooking GetConsoleWindow.");
+    let GetConsoleWindow = unsafe {
+        let module = GetModuleHandleA(s!("kernel32.dll")).unwrap();
+        GetProcAddress(module, s!("GetConsoleWindow")).unwrap()
+    };
     match Hooker::new(
         GetConsoleWindow as usize,
         HookType::Retn(false_gcw),
