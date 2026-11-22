@@ -1,7 +1,9 @@
-// x64.rs: jQuery-style robust pattern matching for x64
+// x64.rs: jQuery-style robust pattern matching for x64 & helpers
 
+use ilhook::x64::Registers;
 use memchr::memmem;
 use std::{
+    collections::HashSet,
     slice,
     time::{Duration, Instant},
 };
@@ -15,12 +17,21 @@ pub struct x64Query {
 }
 
 impl x64Query {
-    // FINAL ACTIONS ONCE FINISHED QUERY CHAIN
+    // MARK: FINAL ACTIONS ONCE FINISHED QUERY CHAIN
     pub fn one(&self) -> bool {
         self.locs.len() == 1
     }
     pub fn first(&self) -> Result<*mut u8, ()> {
         if self.locs.len() > 0 { Ok(self.locs[0] as *mut u8) } else { Err(()) }
+    }
+    pub fn first_as_x64query(&self) -> Result<x64Query, ()> {
+        if self.locs.len() > 0 {
+            let mut x64 = self.clone();
+            x64.locs = vec![self.locs[0]];
+            Ok(x64)
+        } else {
+            Err(())
+        }
     }
     pub unsafe fn patch(&self, REPLACEMENT: &[u8]) -> bool {
         if self.one() {
@@ -31,10 +42,13 @@ impl x64Query {
             false
         }
     }
-    pub fn filter(&mut self, keep_if_true: impl Fn(usize) -> bool){
-        let new_locs: Vec<usize> = self.locs.iter().copied().filter(|&loc| keep_if_true(loc)).collect();
-        info!("[x64Query::filter] {} -> {} locs", self.locs.len(), new_locs.len());
-        self.locs = new_locs;
+    pub fn filter(&self, keep_if_true: impl Fn(usize) -> bool) -> x64Query {
+        let mut x64 = self.clone();
+
+        let new_locs: Vec<usize> = x64.locs.iter().copied().filter(|&loc| keep_if_true(loc)).collect();
+        info!("[x64Query::filter] {} -> {} locs", x64.locs.len(), new_locs.len());
+        x64.locs = new_locs;
+        x64
     }
 
     /// aborts if pattern matches at 0 or 2+ addresses
@@ -55,7 +69,25 @@ impl x64Query {
         }
     }
 
-    // QUERY CHAINING
+    /// aborts if pattern matches at (0 OR different amount than n) addresses.
+    pub fn expect_n(&self, n: usize) {
+        match self.locs.len() {
+            0 => {
+                error!("Could not find pattern. Searched {} B.", self.bytes);
+                error!("Either the pattern or DLL load order has been changed. This may be due to a game update.");
+                die!("Pattern not found.");
+            }
+            x if x == n => {
+                good!("{} matches found at: {:02X?} in {}ms. This is expected.", self.locs.len(), self.locs, self.wasted.as_millis());
+            }
+            _ => {
+                error!("{} matches found at: {:02X?} in {}ms. This is unexpected; pattern is likely not specific enough.", self.locs.len(), self.locs, self.wasted.as_millis());
+                die!("Multiple pattern matches found.")
+            }
+        }
+    }
+
+    // MARK: QUERY CHAINING
     /// scan from each loc in this direction. abs(bytes) = length of haystack array. thus bytes != 0 or you aren't searching anything. i.e.
     ///
     /// - if `bytes > 0`: scan RIGHT, memory [loc, loc + bytes).
@@ -63,15 +95,16 @@ impl x64Query {
     /// - if `bytes < 0`: scan LEFT, memory (loc + bytes, loc].
     ///
     /// then `locs` will be replaced with the new matches from those searches.
-    pub unsafe fn within(mut self, pattern: &[u8], bytes: isize) -> Self {
+    pub unsafe fn within(&self, pattern: &str, bytes: isize) -> x64Query {
         info!("[x64Query::within] Scanning {} {} B at {} locs", if bytes > 0 { "RIGHT" } else { "LEFT" }, bytes.abs(), self.locs.len());
+        let mut x64 = self.clone();
 
-        if self.locs.len() == 0 || bytes == 0 {
-            return self;
+        if x64.locs.is_empty() || bytes == 0 {
+            return x64;
         }
 
-        let orig_locs = self.locs.clone();
-        self.locs.clear();
+        let orig_locs = x64.locs.clone();
+        x64.locs.clear();
         for &addr in &orig_locs {
             let ptr = addr as *mut u8;
             let mut res = if bytes > 0 {
@@ -79,83 +112,28 @@ impl x64Query {
             } else {
                 scan(pattern, ptr.offset(bytes + 1), (-bytes) as usize)
             };
-            self.bytes += res.bytes;
-            self.wasted += res.wasted;
-            self.locs.append(&mut res.locs);
+            // sort it so nearest matches are first
+            res.locs.sort_by(|&a, &b| {
+                let a_dist = addr.abs_diff(a);
+                let b_dist = addr.abs_diff(b);
+                (&a_dist).cmp(&b_dist)
+            });
+            x64.bytes += res.bytes;
+            x64.wasted += res.wasted;
+            x64.locs.append(&mut res.locs);
         }
 
         // incase multiple starting locs that are near eachother hit the same exact loc
-        self.locs.sort_unstable();
-        self.locs.dedup();
+        // dedup while preserving order
+        let mut seen = HashSet::with_capacity(x64.locs.len());
+        x64.locs.retain(|loc| seen.insert(*loc));
 
-        info!("[x64Query::within] {} -> {} locs", orig_locs.len(), self.locs.len());
-        self
-    }
-
-    /// Like within(), but accepts a masked pattern string with ?? wildcards.
-    pub unsafe fn within_wild(mut self, pattern: &str, bytes: isize) -> Self {
-        info!("[x64Query::within_wild] Scanning {} {}B at {} locs", if bytes > 0 { "RIGHT" } else { "LEFT" }, bytes.abs(), self.locs.len());
-
-        if self.locs.is_empty() || bytes == 0 {
-            return self;
-        }
-
-        let orig_locs = self.locs.clone();
-        self.locs.clear();
-        for &addr in &orig_locs {
-            let ptr = addr as *mut u8;
-            let mut res = if bytes > 0 {
-                scan_wild(pattern, ptr, bytes as usize)
-            } else {
-                scan_wild(pattern, ptr.offset(bytes + 1), (-bytes) as usize)
-            };
-            self.bytes += res.bytes;
-            self.wasted += res.wasted;
-            self.locs.append(&mut res.locs);
-        }
-
-        self.locs.sort_unstable();
-        self.locs.dedup();
-        info!("[x64Query::within_wild] {} -> {} locs", orig_locs.len(), self.locs.len());
-        self
+        info!("[x64Query::within] {} -> {} locs", orig_locs.len(), x64.locs.len());
+        x64
     }
 }
 
-/// returns: pointer to first byte of pattern
-pub unsafe fn scan(pattern: &[u8], first_byte: *mut u8, bytes: usize) -> x64Query {
-    // info!("[scan] Scanning for signature: {:02X?} from 0x{:X} to 0x{:X}", pattern, first_byte as usize, first_byte.add(bytes) as usize);
-
-    let slice = slice::from_raw_parts(first_byte, bytes); // slice into a big array
-    let past: Instant = Instant::now();
-    let locs: Vec<usize> = memmem::Finder::new(pattern).find_iter(slice).map(|loc| loc + (first_byte as usize)).collect();
-
-    return x64Query {
-        locs: locs,
-        wasted: past.elapsed(),
-        bytes: bytes,
-    };
-}
-
-/// write new bytes, automatically handle VirtualProtect calls
-unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) {
-    let mut old: u32 = 0;
-    info!("Invoking memwrite.");
-    info!("Getting access level PAGE_EXECUTE_READWRITE...");
-    if VirtualProtect(addr as _, new_bytes.len(), PAGE_EXECUTE_READWRITE, &mut old) == 0 {
-        die!("Failed to get PAGE_EXECUTE_READWRITE access using VirtualProtect. Is the address correct?")
-    }
-    // write the pattern back
-    addr.copy_from_nonoverlapping(new_bytes.as_ptr(), new_bytes.len());
-    info!("Replaced {} bytes with {:02X?}.", new_bytes.len(), new_bytes);
-    // info!("Flushing instruction cache...");
-    // FlushInstructionCache(GetCurrentProcess(), addr as _, new_bytes.len());
-    info!("Reverting protection...");
-    if VirtualProtect(addr as _, new_bytes.len(), old, &mut old) == 0 {
-        error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.")
-    };
-}
-
-// ---- masked pattern support ----
+// MARK: Scan
 
 /// Parse "48 8B ?? 10 33 D2" into (bytes, mask) where mask[i]=0xFF means must-match.
 pub fn parse_wild(pattern: &str) -> (Vec<u8>, Vec<u8>) {
@@ -171,24 +149,37 @@ pub fn parse_wild(pattern: &str) -> (Vec<u8>, Vec<u8>) {
         .unzip()
 }
 
-/// Like scan() but supports ?? wildcards in the pattern string.
-pub unsafe fn scan_wild(pattern: &str, first_byte: *mut u8, len: usize) -> x64Query {
+/// supports ?? wildcards in the pattern string.
+///
+/// warning: doesn't report patterns that overlap
+pub unsafe fn scan(pattern: &str, first_byte: *mut u8, len: usize) -> x64Query {
     let (pat_bytes, pat_mask) = parse_wild(pattern);
     let plen = pat_bytes.len();
-
-    // info!("[scan_wild] {:?} from 0x{:X} ({} B)", pattern, first_byte as usize, len);
+    // info!("[scan] {:?} from 0x{:X} ({} B)", pattern, first_byte as usize, len);
 
     if plen == 0 || plen > len {
         return x64Query {
             locs: vec![],
             wasted: Duration::ZERO,
-            bytes: len,
+            bytes: 0,
         };
     }
 
     let slice = slice::from_raw_parts(first_byte, len);
     let past = Instant::now();
 
+    // no-wildcard path:
+    if pat_mask.iter().all(|&m| m != 0) {
+        let locs: Vec<usize> = memmem::find_iter(slice, &pat_bytes).map(|loc| loc + first_byte as usize).collect();
+
+        return x64Query {
+            locs,
+            wasted: past.elapsed(),
+            bytes: len,
+        };
+    }
+
+    // wildcard path:
     // Pick the rarest solid byte as the memmem anchor to minimize false-positive checks.
     let (anchor_offset, anchor_byte) = pat_bytes
         .iter()
@@ -229,9 +220,141 @@ pub unsafe fn scan_wild(pattern: &str, first_byte: *mut u8, len: usize) -> x64Qu
     }
 }
 
+// MARK: Resolving regs
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Reg64 {
+    Rax,
+    Rcx,
+    Rdx,
+    Rbx,
+    Rsp,
+    Rbp,
+    Rsi,
+    Rdi,
+    R8,
+    R9,
+    R10,
+    R11,
+    R12,
+    R13,
+    R14,
+    R15,
+}
+
+impl Reg64 {
+    const fn from_idx(i: u8) -> Self {
+        match i & 0xF {
+            0 => Self::Rax,
+            1 => Self::Rcx,
+            2 => Self::Rdx,
+            3 => Self::Rbx,
+            4 => Self::Rsp,
+            5 => Self::Rbp,
+            6 => Self::Rsi,
+            7 => Self::Rdi,
+            8 => Self::R8,
+            9 => Self::R9,
+            10 => Self::R10,
+            11 => Self::R11,
+            12 => Self::R12,
+            13 => Self::R13,
+            14 => Self::R14,
+            _ => Self::R15,
+        }
+    }
+}
+
+pub fn mov_rdx_reg_WHICHREG(b: [u8; 3]) -> Option<Reg64> {
+    let [rex, op, modrm] = b;
+    let w = (rex >> 3) & 1;
+    let r = (rex >> 2) & 1;
+    let b_bit = rex & 1;
+
+    if (rex & 0xF0) != 0x40 || w != 1 || op != 0x8B {
+        return None;
+    }
+
+    let mod_bits = (modrm >> 6) & 0b11;
+    let reg_bits = (modrm >> 3) & 0b111;
+    let rm_bits = modrm & 0b111;
+
+    // Register-direct mode (mod == 11) and destination must be RDX (index 2).
+    if mod_bits != 0b11 || ((r << 3) | reg_bits) != 2 {
+        return None;
+    }
+
+    Some(Reg64::from_idx((b_bit << 3) | rm_bits))
+}
+
+pub unsafe fn read_reg(regs: *mut Registers, reg: Reg64) -> u64 {
+    match reg {
+        Reg64::Rax => (*regs).rax,
+        Reg64::Rcx => (*regs).rcx,
+        Reg64::Rdx => (*regs).rdx,
+        Reg64::Rbx => (*regs).rbx,
+        Reg64::Rsp => (*regs).rsp,
+        Reg64::Rbp => (*regs).rbp,
+        Reg64::Rsi => (*regs).rsi,
+        Reg64::Rdi => (*regs).rdi,
+        Reg64::R8 => (*regs).r8,
+        Reg64::R9 => (*regs).r9,
+        Reg64::R10 => (*regs).r10,
+        Reg64::R11 => (*regs).r11,
+        Reg64::R12 => (*regs).r12,
+        Reg64::R13 => (*regs).r13,
+        Reg64::R14 => (*regs).r14,
+        Reg64::R15 => (*regs).r15,
+    }
+}
+
+// MARK: Helpers
+
+/// write new bytes, automatically handle VirtualProtect calls
+unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) {
+    let mut old: u32 = 0;
+    info!("Invoking memwrite.");
+    info!("Getting access level PAGE_EXECUTE_READWRITE...");
+    if VirtualProtect(addr as _, new_bytes.len(), PAGE_EXECUTE_READWRITE, &mut old) == 0 {
+        die!("Failed to get PAGE_EXECUTE_READWRITE access using VirtualProtect. Is the address correct?")
+    }
+    // write the pattern back
+    addr.copy_from_nonoverlapping(new_bytes.as_ptr(), new_bytes.len());
+    info!("Replaced {} bytes with {:02X?}.", new_bytes.len(), new_bytes);
+    // info!("Flushing instruction cache...");
+    // FlushInstructionCache(GetCurrentProcess(), addr as _, new_bytes.len());
+    info!("Reverting protection...");
+    if VirtualProtect(addr as _, new_bytes.len(), old, &mut old) == 0 {
+        error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.")
+    };
+}
+
+/// e8 = call rel32
 /// gives absolute address of sub
-pub unsafe fn where_is_E8call_going(e8_byte: *const u8) -> *const u8 {
-    assert_eq!(*e8_byte, 0xE8, "0x{:X} aint E8", e8_byte as usize);
-    let rel = *(e8_byte.add(1) as *const i32);
-    e8_byte.add(5).offset(rel as isize)
+pub unsafe fn where_is_E8call_going(e8_byte: *const u8) -> usize {
+    if *e8_byte != 0xE8 {
+        die!("[where_is_E8call_going] 0x{:X} aint E8", e8_byte as usize);
+    }
+    let rel = (e8_byte.add(1) as *const i32).read_unaligned();
+    let place = e8_byte.add(5).offset(rel as isize) as usize;
+
+    // info!("[where_is_E8call_going] E8 @ 0x{:X} -> call 0x{:X}", e8_byte as usize, place);
+    place
+}
+
+/// FF 25 = jmp [rip+rel32].
+/// gives absolute address of sub
+pub unsafe fn where_is_FF25jmp_going(FF_byte: *const u8) -> usize {
+    if *FF_byte != 0xFF {
+        die!("[where_is_FF25jmp_going] 0x{:X} aint FF", *FF_byte as usize);
+    }
+    if (FF_byte.add(1)).read_unaligned() != 0x25 {
+        die!("[where_is_FF25jmp_going] 0x{:X} aint 25", (*FF_byte.add(1)) as usize);
+    }
+
+    let rel = (FF_byte.add(2) as *const i32).read_unaligned();
+    let place = (FF_byte.add(6).offset(rel as isize) as *const usize).read_unaligned();
+
+    // info!("[where_is_FF25jmp_going] FF25 @ 0x{:X} -> jmp 0x{:X}", FF_byte as usize, place);
+    place
 }

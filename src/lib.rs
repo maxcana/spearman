@@ -78,8 +78,8 @@ unsafe fn begin() {
 
 pub unsafe fn on_dll() {
     info!("Assuming unpacking is complete.");
-
     mem::patch_protmem();
+    
     // info!("Starting spy thread...");
     // std::thread::spawn(|| { spy(); }); // wait for spy.rs to tell us on_archives_loaded()
 }

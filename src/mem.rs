@@ -6,14 +6,15 @@ use crate::{
     win::{Modu, find_module},
 };
 use ilhook::x64::{CallbackOption, HookFlags, HookType, Hooker, Registers};
+use std::sync::atomic::AtomicU8;
 use std::{
-    ptr,
+    ptr, slice,
     sync::atomic::{AtomicPtr, Ordering::SeqCst},
 };
 
 pub unsafe fn patch_sigcheck() {
     info!("Patching SIGCHECK...");
-    let sigcheck = scaneth(&[0x85, 0xC0, 0x0F, 0x94, 0xC0, 0xEB, 0x02, 0x32, 0xC0, 0x4C, 0x8D, 0x9C, 0x24, 0x60, 0x02, 0x00, 0x00]);
+    let sigcheck = scaneth("85 C0 0F 94 C0 EB 02 32 C0 4C 8D 9C 24 60 02 00 00");
     sigcheck.expect_one();
     sigcheck.patch(&[
         0x85, 0xC0, NOP, 0xB0, 0x01, // mov al, 1
@@ -22,51 +23,79 @@ pub unsafe fn patch_sigcheck() {
     ]);
 }
 
+static REGISTER_THAT_HOLDS_META: AtomicU8 = AtomicU8::new(0);
+
 pub unsafe fn patch_protmem() {
-    /* middle part of enter
-        - 33 D2           xor edx, edx        (bool false — ABI-pinned, always here)
-        - E8 ?? ?? ?? ??  call soften         (relative offset varies per build)
-        - ?? 8B ?? 10     mov rXX,[rYY+0x10]  (REX byte and both regs vary)
-        - 80 ?? 19 00     cmp byte[r+0x19],0  (/7 opcode stays, ModRM reg field varies)
-        - 74 ??           jz short            (displacement varies)
-        - ?? 8B ?? 08     mov rXX,[rYY+0x08]  (follow sibling — same variation)
-        - EB ??           jmp short           (back into walk loop)
-    */
-    info!("Finding BNetSec::ProtMem::enter...");
-
-    let mut enter = scaneth(&[
-        0x48, 0x85, 0xD2, 0x0F, 0x84, // test rdx, rdx; jz = start of ProtMem::enter
-    ])
-    .within_wild("33 D2 E8 ?? ?? ?? ?? ?? 8B ?? 10 80 ?? 19 00 74 ?? ?? 8B ?? 08 EB ??", 0x100); // callsite of BNetSec::ProtMem::soften
-
-    // ensure we are calling `soften`
-    enter.filter(|addr| {
-        let e8 = addr + 2;
-
-        let soften = where_is_E8call_going(e8 as _);
-        // soften has the pattern:
-        // [
-        //  F0 ?? 0F C1 ?? 30 (lock xadd [rdi+30h], rax)
-        //  ?? 03 ?? (add rax, r15)
-        //  48 83 F8 02 (cmp rax, 2)
-        // ]
-        scan_wild("F0 ?? 0F C1 ?? 30 ?? 03 ?? ?? 83 ?? ??", soften as _, 300).one()
-    });
-
-    // go back to start
-    enter = enter.within(
-        &[
-            0x48, 0x85, 0xD2, 0x0F, 0x84, // test rdx, rdx; jz = start of ProtMem::enter
-        ],
-        -0x100,
+    // ---- finding KiUserDispatcher_In_C ----
+    info!("Finding KiUserDispatcher_In_ASM...");
+    let ki_asm_mid = scaneth(
+        "50 53 51 52 57 56 41 50 41 51 41 52 41 53 41 54 41 55", // push rax; push rbx; push rcx; push rdx; push rdi; push rsi; push r8; push r9; push r10; push r11; push r12; push r13; push r14; push r15; push rbp
     );
+    ki_asm_mid.expect_one();
+    good!("KiUserDispatcher_In_ASM @ ~0x{:X}", ki_asm_mid.first().unwrap() as usize);
 
-    enter.expect_one();
+    info!("Finding KiUserDispatcher_In_C...");
+    let ki_in_c_call = ki_asm_mid.within("E8", 0x50).first().unwrap();
+    let ki_in_c = where_is_E8call_going(ki_in_c_call);
+    good!("KiUserDispatcher_In_C @ 0x{:X}", ki_in_c as usize);
 
-    let Enter = enter.first().unwrap();
+    let e8s = scan("E8", ki_in_c as _, 7336).filter(|addr| {
+        // prevent silent crash from scanning unmapped memory.
+        // this suggests the e8s are probably real call instructions.
+        // they at least point to valid reliccardinal memory
+        is_real_memory(where_is_E8call_going(addr as _))
+    });
+    // ---- finding callsite of BNetSec::ProtMem::enter() ----
+    info!("Finding KiUserDispatcher_In_C :: callsite of BNetSec::ProtMem::enter()...");
+    let enter_or_exit_e8 = e8s.filter(|addr| {
+        let place = where_is_E8call_going(addr as _);
+        let is_ProtMem_enter_prologue = scan("48 85 D2 0F 84", place as _, 5).one(); // test rdx, rdx; jz
 
-    info!("[Hook] Hooking BNetSec::ProtMem::enter.");
-    match Hooker::new(Enter as usize, HookType::Retn(false_enter), CallbackOption::None, 0, HookFlags::empty()).hook() {
+        is_ProtMem_enter_prologue
+    });
+    enter_or_exit_e8.expect_n(1);
+    let enter_e8 = enter_or_exit_e8.first_as_x64query().unwrap();
+    let callsite_of_enter = enter_e8.first().unwrap() as usize;
+
+    good!("callsite of BNetSec::ProtMem::enter() @ 0x{:X}", callsite_of_enter);
+
+    // ---- finding which register stores _DynFHMeta ----
+    info!("Finding the register that stores _DynFHMeta...");
+    info!("Searching for previous mov instructions...");
+    let mut movs = enter_e8.within("8B", -10);
+    movs = movs.filter(|addr| {
+        let triplet_addr = addr - 1;
+        let triplet: [u8; 3] = slice::from_raw_parts(triplet_addr as *mut u8, 3).try_into().unwrap();
+        let res = mov_rdx_reg_WHICHREG(triplet);
+        res.is_some()
+    });
+    movs.expect_one();
+    let triplet_addr = movs.first().unwrap().offset(-1);
+    let triplet: [u8; 3] = slice::from_raw_parts(triplet_addr, 3).try_into().unwrap();
+    let reg = mov_rdx_reg_WHICHREG(triplet).unwrap();
+    REGISTER_THAT_HOLDS_META.store(reg as _, SeqCst);
+    good!("_DynFHMeta register is {:?}.", reg);
+
+    // ---- finding _PROTDR decrypted place ----
+    info!("Finding KiUserDispatcher_In_C :: _PROTDR decrypted place...");
+    let jmpstub_e8s = e8s.filter(|addr| {
+        let place = where_is_E8call_going(addr as _);
+
+        let is_indirectjmp_stub = scan("FF 25", place as _, 2).one();
+
+        is_indirectjmp_stub
+    });
+    // could filter e8s even more, ensuring that its definitely memcpy by resolving it from vcruntime and comparing the FF25[] address to vcruntime memcpy
+    jmpstub_e8s.expect_one();
+    let memcpy = jmpstub_e8s.first().unwrap();
+    let decryption_complete = scan("?? 80 ?? 17", memcpy, 140);
+    decryption_complete.expect_one();
+    let decrypted = decryption_complete.first().unwrap() as usize;
+    good!("_PROTDR decrypted place @ 0x{:X}", decrypted);
+
+    // ---- hook ----
+    info!("[Hook] Hooking KiUserDispatcher_In_C at the place _PROTDR is decrypted.");
+    match Hooker::new(decrypted, HookType::JmpBack(ki_hook), CallbackOption::None, 0, HookFlags::empty()).hook() {
         Err(e) => error!("[Hook] Failed to hook enter: {}.", e),
         Ok(hook) => {
             good!("[Hook] Successfully hooked enter.");
@@ -75,22 +104,16 @@ pub unsafe fn patch_protmem() {
     }
 }
 
-unsafe extern "win64" fn false_enter(regs: *mut Registers, ori_func_ptr: usize, _: usize) -> usize {
-    let orig_enter: unsafe extern "win64" fn(idk: u64, coolstruct: u64) = core::mem::transmute(ori_func_ptr);
-    orig_enter((*regs).rcx, (*regs).rdx);
+unsafe extern "win64" fn ki_hook(regs: *mut Registers, ori_func_ptr: usize) {
+    let the_reg: Reg64 = std::mem::transmute(REGISTER_THAT_HOLDS_META.load(SeqCst));
 
-    if (*regs).rdx == 0 {
-        return 0;
-    }
-    let DynFHMeta_ptr = (*regs).rdx as *mut u8;
+    let DynFHMeta_ptr = read_reg(regs, the_reg) as *mut u8;
 
-    let size = *(DynFHMeta_ptr.add(0x00) as *const u64);
-    let rva = *(DynFHMeta_ptr.add(0x20) as *const u64);
-    // info!("[Hook] BNetSec::ProtMem::enter decrypted @ RVA 0x{:X}, size {}", rva, size);
+    let size = (DynFHMeta_ptr.add(0x00) as *const u64).read_unaligned();
+    let rva = (DynFHMeta_ptr.add(0x20) as *const u64).read_unaligned();
 
     // we can only patch DFH (isNextBucketValid_PROTDR) while it is unencrypted, because of new _PROTDR protection.
     check_for_and_patch_dfh(rva as _, size as usize);
-    0 // rax = 0 (doesn't matter since `void`, ilhook expects it. volatile reg, so this is ok)
 }
 
 static mut ALREADY_PATCHED_OUT_DFH: bool = false;
@@ -106,22 +129,22 @@ unsafe fn check_for_and_patch_dfh(start_of_decrypted_region: *mut u8, length_of_
     // info!("[Hook] Scanning for DFH.");
 
     let dfh1 = scan(
-        &[
-            // normal, like in build Yue Fei's Legacy
-            0x0f, 0x95, 0xc1, // setne  cl
-            0x0f, 0x94, 0xc0, // sete   al
-            0x88, 0x4e, 0x21, // mov    BYTE PTR [rsi+0x21],cl
-        ],
+        // normal, like in build Yue Fei's Legacy
+        concat!(
+            "0f 95 c1 ", // setne  cl
+            "0f 94 c0 ", // sete   al
+            "88 4e 21",  // mov    BYTE PTR [rsi+0x21],cl
+        ),
         start_of_decrypted_region,
         length_of_decrypted_region,
     );
     let dfh2 = scan(
-        &[
-            // reverse order, like in build 2026-11-09
-            0x0f, 0x94, 0xc0, // sete   al
-            0x0f, 0x95, 0xc1, // setne  cl
-            0x88, 0x4e, 0x21, // mov    BYTE PTR [rsi+0x21],cl
-        ],
+        // reverse order, like in build 2026-11-09
+        concat!(
+            "0f 94 c0 ", // sete   al
+            "0f 95 c1 ", // setne  cl
+            "88 4e 21",  // mov    BYTE PTR [rsi+0x21],cl
+        ),
         start_of_decrypted_region,
         length_of_decrypted_region,
     );
@@ -155,11 +178,14 @@ unsafe fn check_for_and_patch_dfh(start_of_decrypted_region: *mut u8, length_of_
 static MODU_BASE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
 static MODU_SIZE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
 
-pub unsafe fn scaneth(PATTERN: &[u8]) -> x64Query {
+pub unsafe fn scaneth(PATTERN: &str) -> x64Query {
     scan(PATTERN, MODU_BASE.load(SeqCst), MODU_SIZE.load(SeqCst) as usize)
 }
-pub unsafe fn scaneth_wild(PATTERN: &str) -> x64Query {
-    scan_wild(PATTERN, MODU_BASE.load(SeqCst), MODU_SIZE.load(SeqCst) as usize)
+
+pub unsafe fn is_real_memory(addr: usize) -> bool {
+    let base = MODU_BASE.load(SeqCst) as usize;
+    let size = MODU_SIZE.load(SeqCst) as usize;
+    return addr >= base && addr < base + size;
 }
 
 /// obtain the module info (necessary to do pattern scanning)
