@@ -11,7 +11,7 @@ use std::{
     sync::atomic::{AtomicPtr, Ordering::SeqCst},
 };
 
-unsafe fn patch_sigcheck() {
+pub unsafe fn patch_sigcheck() {
     info!("Patching SIGCHECK...");
     let sigcheck = scaneth(&[0x85, 0xC0, 0x0F, 0x94, 0xC0, 0xEB, 0x02, 0x32, 0xC0, 0x4C, 0x8D, 0x9C, 0x24, 0x60, 0x02, 0x00, 0x00]);
     sigcheck.expect_one();
@@ -22,7 +22,7 @@ unsafe fn patch_sigcheck() {
     ]);
 }
 
-pub unsafe fn patch_shit() {
+pub unsafe fn patch_protmem() {
     /* middle part of enter
         - 33 D2           xor edx, edx        (bool false — ABI-pinned, always here)
         - E8 ?? ?? ?? ??  call soften         (relative offset varies per build)
@@ -38,25 +38,28 @@ pub unsafe fn patch_shit() {
         0x48, 0x85, 0xD2, 0x0F, 0x84, // test rdx, rdx; jz = start of ProtMem::enter
     ])
     .within_wild("33 D2 E8 ?? ?? ?? ?? ?? 8B ?? 10 80 ?? 19 00 74 ?? ?? 8B ?? 08 EB ??", 0x100); // callsite of BNetSec::ProtMem::soften
-    
+
     // ensure we are calling `soften`
     enter.filter(|addr| {
         let e8 = addr + 2;
-        
+
         let soften = where_is_E8call_going(e8 as _);
         // soften has the pattern:
         // [
-        //  F0 ?? 0F C1 ?? 30 (lock xadd [rdi?+30h], ??)
-        //  ?? 03 ?? (add A, B)
+        //  F0 ?? 0F C1 ?? 30 (lock xadd [rdi+30h], rax)
+        //  ?? 03 ?? (add rax, r15)
         //  48 83 F8 02 (cmp rax, 2)
         // ]
         scan_wild("F0 ?? 0F C1 ?? 30 ?? 03 ?? ?? 83 ?? ??", soften as _, 300).one()
     });
 
     // go back to start
-    enter = enter.within(&[
-        0x48, 0x85, 0xD2, 0x0F, 0x84, // test rdx, rdx; jz = start of ProtMem::enter
-    ], -0x100);
+    enter = enter.within(
+        &[
+            0x48, 0x85, 0xD2, 0x0F, 0x84, // test rdx, rdx; jz = start of ProtMem::enter
+        ],
+        -0x100,
+    );
 
     enter.expect_one();
 
@@ -65,19 +68,25 @@ pub unsafe fn patch_shit() {
     info!("[Hook] Hooking BNetSec::ProtMem::enter.");
     match Hooker::new(Enter as usize, HookType::Retn(false_enter), CallbackOption::None, 0, HookFlags::empty()).hook() {
         Err(e) => error!("[Hook] Failed to hook enter: {}.", e),
-        Ok(_) => good!("[Hook] Successfully hooked enter."),
+        Ok(hook) => {
+            good!("[Hook] Successfully hooked enter.");
+            core::mem::forget(hook); // never unhook
+        }
     }
 }
 
-unsafe extern "win64" fn false_enter(regs: *mut Registers, orig_func_ptr: usize, _: usize) -> usize {
-    let orig_enter: unsafe extern "win64" fn(addr: u64, flag: u64) = core::mem::transmute(orig_func_ptr);
+unsafe extern "win64" fn false_enter(regs: *mut Registers, ori_func_ptr: usize, _: usize) -> usize {
+    let orig_enter: unsafe extern "win64" fn(idk: u64, coolstruct: u64) = core::mem::transmute(ori_func_ptr);
     orig_enter((*regs).rcx, (*regs).rdx);
 
+    if (*regs).rdx == 0 {
+        return 0;
+    }
     let DynFHMeta_ptr = (*regs).rdx as *mut u8;
 
     let size = *(DynFHMeta_ptr.add(0x00) as *const u64);
     let rva = *(DynFHMeta_ptr.add(0x20) as *const u64);
-    info!("[Hook] BNetSec::ProtMem::enter decrypted @ RVA 0x{:X}, size {}", rva, size);
+    // info!("[Hook] BNetSec::ProtMem::enter decrypted @ RVA 0x{:X}, size {}", rva, size);
 
     // we can only patch DFH (isNextBucketValid_PROTDR) while it is unencrypted, because of new _PROTDR protection.
     check_for_and_patch_dfh(rva as _, size as usize);
@@ -94,7 +103,7 @@ unsafe fn check_for_and_patch_dfh(start_of_decrypted_region: *mut u8, length_of_
     if ALREADY_PATCHED_OUT_DFH {
         return;
     }
-    info!("[Hook] Scanning for DFH.");
+    // info!("[Hook] Scanning for DFH.");
 
     let dfh1 = scan(
         &[
@@ -137,9 +146,9 @@ unsafe fn check_for_and_patch_dfh(start_of_decrypted_region: *mut u8, length_of_
 
         ALREADY_PATCHED_OUT_DFH = true;
         good!("BNetSec::TamperedMemoryDetection::isNextBucketValid_PROTDR patched out successfully.");
-        patch_sigcheck();
+        crate::on_dfh_patched();
     } else {
-        info!("Wasted {}ms scanning for isNextBucketValid_PROTDR", (dfh1.wasted + dfh2.wasted).as_millis())
+        // info!("Wasted {}ms scanning for isNextBucketValid_PROTDR", (dfh1.wasted + dfh2.wasted).as_millis())
     }
 }
 

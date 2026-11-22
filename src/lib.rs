@@ -16,8 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::thread::{self};
 // modules
 #[macro_use]
-mod log;
-use log::*;
+mod log; use log::*;
 #[macro_use]
 mod win; use win::*;
 mod val; use val::*;
@@ -71,18 +70,22 @@ unsafe fn begin() {
 
     win::hook_console();
 
+    mem::init();
+
     info!("Waiting for code to unpack...");
-    win::register_dll_hook(); // wait until dll loads 
+    win::register_dll_hook(); // wait until dll loads
 }
 
 pub unsafe fn on_dll() {
     info!("Assuming unpacking is complete.");
 
-    mem::init();
-    mem::patch_shit();
-
+    mem::patch_protmem();
     // info!("Starting spy thread...");
     // std::thread::spawn(|| { spy(); }); // wait for spy.rs to tell us on_archives_loaded()
+}
+
+pub unsafe fn on_dfh_patched() {
+    mem::patch_sigcheck();
 }
 
 pub unsafe fn on_archives_loaded() {

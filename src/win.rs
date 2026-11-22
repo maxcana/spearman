@@ -23,7 +23,7 @@ use windows::{
     core::{PCSTR, s},
 };
 
-use crate::val::VERSION_DLL_NAME;
+use crate::{mem, val::VERSION_DLL_NAME};
 #[macro_use]
 use crate::{log, val::PATCH_AT_DLL};
 pub struct Modu {
@@ -172,7 +172,10 @@ pub unsafe fn hook_console() {
     };
     match Hooker::new(GetConsoleWindow as usize, HookType::Retn(false_gcw), CallbackOption::None, 0, HookFlags::empty()).hook() {
         Err(e) => error!("[Hook] Failed to hook GetConsoleWindow: {}.", e),
-        Ok(_) => good!("[Hook] Successfully hooked GetConsoleWindow."),
+        Ok(hook) => {
+            good!("[Hook] Successfully hooked GetConsoleWindow.");
+            core::mem::forget(hook) // never unhook
+        }
     }
 }
 
