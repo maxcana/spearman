@@ -19,14 +19,11 @@ use std::thread::{self};
 mod log;
 use log::*;
 #[macro_use]
-mod win;
-use win::*;
-mod val;
-use val::*;
-mod mem;
-use mem::*;
-mod spy;
-use spy::*;
+mod win; use win::*;
+mod val; use val::*;
+mod mem; use mem::*;
+mod spy; use spy::*;
+mod x64; use x64::*;
 
 // entry. "system" defines the calling convention
 #[unsafe(no_mangle)]
