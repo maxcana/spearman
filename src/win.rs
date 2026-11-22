@@ -14,6 +14,7 @@ use ilhook::x64::{CallbackOption, HookFlags, HookType, Hooker, Registers};
 use winapi::um::{
     processthreadsapi::*,
     psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO},
+    wincon::FreeConsole,
     winnt::LPSTR,
 };
 use winapi::{ctypes::c_void, shared::minwindef::HMODULE};
@@ -132,12 +133,19 @@ pub unsafe fn register_dll_hook() {
     // we are supposed to use this cookie to unregister the callback with LdrUnregisterDllNotification when our dll is detached. ill do that if i feel like it
     let mut cookie = std::ptr::null_mut();
 
-    LdrRegisterDllNotification(0, dll_callback, std::ptr::null_mut(), &mut cookie);
+    let status = LdrRegisterDllNotification(0, dll_callback, std::ptr::null_mut(), &mut cookie);
+    if status != 0 {
+        die!("[register_dll_hook] Failed to register. status = {}", status)
+    }
+
     COOKIE.store(cookie, SeqCst); // SeqCst = no compiler reordering operaions
     PAST.set(time::Instant::now()).unwrap();
 }
 
 unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFICATION_DATA, _context: *mut c_void) {
+    let n = &*(*data).Loaded.BaseDllName;
+    info!("[dll] {} {}", String::from_utf16_lossy(std::slice::from_raw_parts(n.Buffer, (n.Length / 2) as usize)), if reason == 1 { "loaded" } else { "unloaded" });
+
     if reason != LDR_DLL_NOTIFICATION_REASON_LOADED {
         return;
     }

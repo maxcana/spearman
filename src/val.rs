@@ -4,7 +4,7 @@ use std::os::raw::c_int;
 
 
 /// when this dll is loaded we assume the code has been unpacked
-pub const PATCH_AT_DLL: &str = "devobj.dll";
+pub const PATCH_AT_DLL: &str = "dbghelp.dll";//"netapi32.dll";
 
 pub const TARGET: &str = "RelicCardinal.exe";
 

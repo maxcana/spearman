@@ -8,12 +8,10 @@ use crate::{
 use ilhook::x64::{CallbackOption, HookFlags, HookType, Hooker, Registers};
 use std::{
     ptr,
-    sync::{
-        atomic::{AtomicPtr, Ordering::SeqCst},
-    },
+    sync::atomic::{AtomicPtr, Ordering::SeqCst},
 };
 
-pub unsafe fn patch_shit() {
+unsafe fn patch_sigcheck() {
     info!("Patching SIGCHECK...");
     let sigcheck = scaneth(&[0x85, 0xC0, 0x0F, 0x94, 0xC0, 0xEB, 0x02, 0x32, 0xC0, 0x4C, 0x8D, 0x9C, 0x24, 0x60, 0x02, 0x00, 0x00]);
     sigcheck.expect_one();
@@ -22,14 +20,16 @@ pub unsafe fn patch_shit() {
         0xEB, 0x02, 0xB0, 0x01, // mov al, 1
         0x4C, 0x8D, 0x9C, 0x24, 0x60, 0x02, 0x00, 0x00,
     ]);
+}
 
+pub unsafe fn patch_shit() {
     // [
     //  F0 48 0F C1 ?? ?? (lock xadd [rdi?+30h?], rax)
     //  ?? 03 ?? (add A, B)
     //  48 83 F8 02 (cmp rax, 2)
     // ]
     info!("Finding BNetSec::ProtMem::soften...");
-    let soften_mid = scaneth(&[0xF0, 0x48, 0x0F, 0xC1]).within(&[0x48, 0x83, 0xF8, 0x02], 10).within(&[0x03], -3);
+    let soften_mid = scaneth(&[0xF0, 0x48, 0x0F, 0xC1]).within(&[0x48, 0x83, 0xF8, 0x02], 15).within(&[0x03], -3);
     soften_mid.expect_one();
 
     let soften = soften_mid.within(
@@ -50,19 +50,25 @@ pub unsafe fn patch_shit() {
 }
 
 unsafe extern "win64" fn false_soften(regs: *mut Registers, orig_func_ptr: usize, _: usize) -> usize {
+    info!("[Hook] BNetSec::ProtMem::soften was called.");
     let orig_soften: unsafe extern "win64" fn(addr: u64, flag: u64) = core::mem::transmute(orig_func_ptr);
     orig_soften((*regs).rcx, (*regs).rdx);
+    // we can only patch DFH (isNextBucketValid_PROTDR) while it is unencrypted, because of new _PROTDR protection.
     check_for_and_patch_dfh((*regs).rcx);
-    0 // rax = 0 (doesn't matter since `void`, Hooker expects it, volatile reg. so this is ok)
+    0 // rax = 0 (doesn't matter since `void`, ilhook expects it. volatile reg, so this is ok)
 }
 
 static mut ALREADY_PATCHED_OUT_DFH: bool = false;
 
+// "DFH"="Data-flow-hashing" anti-tamper protection. this is an archaic term guessed from Aegis_RelicCardinal.log.
+// that "DFH" most likely really refers to "Delayed Function Hiding"
+// the canonical, correct name for "DFH" is BNetSec::TamperedMemoryDetection::isNextBucketValid_PROTDR
+// but i still use DFH since it's engrained into me
 unsafe fn check_for_and_patch_dfh(base_addr: u64) {
     if ALREADY_PATCHED_OUT_DFH {
         return;
     }
-    info!("[Hook] BNetSec::ProtMem::soften was called, scanning for DFH.");
+    info!("[Hook] Scanning for DFH.");
 
     let dfh1 = scan(
         &[
@@ -105,8 +111,9 @@ unsafe fn check_for_and_patch_dfh(base_addr: u64) {
 
         ALREADY_PATCHED_OUT_DFH = true;
         good!("BNetSec::TamperedMemoryDetection::isNextBucketValid_PROTDR patched out successfully.");
+        patch_sigcheck();
     } else {
-        info!("Wasted {}ms scanning for isNextBucketValid_PROTDR", dfh1.ms + dfh2.ms)
+        info!("Wasted {}ms scanning for isNextBucketValid_PROTDR", (dfh1.wasted + dfh2.wasted).as_millis())
     }
 }
 

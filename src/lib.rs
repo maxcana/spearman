@@ -81,17 +81,15 @@ pub unsafe fn on_dll() {
     mem::init();
     mem::patch_shit();
 
-    info!("Starting spy thread...");
-    std::thread::spawn(|| {
-        spy();
-    }); // wait for spy.rs to tell us on_archives_loaded()
+    // info!("Starting spy thread...");
+    // std::thread::spawn(|| { spy(); }); // wait for spy.rs to tell us on_archives_loaded()
 }
 
 pub unsafe fn on_archives_loaded() {
     good!("All archives loaded!");
     good!("Have fun! :D");
 
-    info!("This console will automatically close in 2 seconds to avoid detection.");
+    info!("This console will automatically close in 2 seconds.");
     thread::sleep(std::time::Duration::from_secs(2));
     FreeConsole();
 }

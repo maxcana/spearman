@@ -1,16 +1,16 @@
+// x64.rs: jQuery-style robust pattern matching for x64
+
 use memchr::memmem;
 use std::{
     slice,
-    time::Instant,
+    time::{Duration, Instant},
 };
-use winapi::um::{
-    memoryapi::VirtualProtect, winnt::PAGE_EXECUTE_READWRITE,
-};
+use winapi::um::{memoryapi::VirtualProtect, winnt::PAGE_EXECUTE_READWRITE};
 
 #[derive(Clone)]
 pub struct x64Query {
     pub locs: Vec<usize>,
-    pub ms: u128,
+    pub wasted: Duration,
     pub bytes: usize,
 }
 
@@ -40,10 +40,10 @@ impl x64Query {
                 die!("Pattern not found.");
             }
             1 => {
-                good!("Pattern matched at address 0x{:X} in {}ms.", self.locs[0], self.ms);
+                good!("Pattern matched at address 0x{:X} in {}ms.", self.locs[0], self.wasted.as_millis());
             }
             _ => {
-                error!("{} matches found at: {:02X?} in {}ms. This is unexpected; pattern is likely not specific enough.", self.locs.len(), self.locs, self.ms);
+                error!("{} matches found at: {:02X?} in {}ms. This is unexpected; pattern is likely not specific enough.", self.locs.len(), self.locs, self.wasted.as_millis());
                 die!("Multiple pattern matches found.")
             }
         }
@@ -71,12 +71,16 @@ impl x64Query {
             let mut res = if bytes > 0 {
                 scan(pattern, ptr, bytes as usize)
             } else {
-                scan(pattern, ptr.offset(bytes), (-bytes) as usize)
+                scan(pattern, ptr.offset(bytes + 1), (-bytes) as usize)
             };
             self.bytes += res.bytes;
-            self.ms += res.ms;
+            self.wasted += res.wasted;
             self.locs.append(&mut res.locs);
         }
+
+        // incase multiple starting locs that are near eachother hit the same exact loc
+        self.locs.sort_unstable();
+        self.locs.dedup();
 
         info!("[x64Query::within] Refined down to {} locs", self.locs.len());
         self
@@ -85,7 +89,9 @@ impl x64Query {
 
 /// returns: pointer to first byte of pattern
 pub unsafe fn scan(pattern: &[u8], first_byte: *mut u8, bytes: usize) -> x64Query {
-    info!("[scan] Scanning for signature: {:02X?} from 0x{:X} to 0x{:X}", pattern, first_byte as usize, first_byte.add(bytes) as usize);
+    if bytes > 200 {
+        info!("[scan] Scanning for signature: {:02X?} from 0x{:X} to 0x{:X}", pattern, first_byte as usize, first_byte.add(bytes) as usize);
+    }
 
     let slice = slice::from_raw_parts(first_byte, bytes); // slice into a big array
     let past: Instant = Instant::now();
@@ -93,7 +99,7 @@ pub unsafe fn scan(pattern: &[u8], first_byte: *mut u8, bytes: usize) -> x64Quer
 
     return x64Query {
         locs: locs,
-        ms: past.elapsed().as_millis(),
+        wasted: past.elapsed(),
         bytes: bytes,
     };
 }
