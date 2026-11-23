@@ -12,7 +12,7 @@ use winapi::{
     },
 };
 
-use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+use std::sync::atomic::{Ordering::SeqCst};
 use std::thread::{self};
 // modules
 #[macro_use]

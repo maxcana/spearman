@@ -3,12 +3,12 @@
 use crate::x64::*;
 use crate::{
     val::{NOP, TARGET},
-    win::{Modu, find_cave_near, find_module},
+    win::{Modu, find_module},
 };
-use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind};
+use iced_x86::{Mnemonic, OpKind};
 use ilhook::x64::{CallbackOption, HookFlags, HookType, Hooker, Registers};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 use std::sync::{Mutex, OnceLock};
 use std::{
     ptr, slice,
@@ -57,25 +57,23 @@ pub unsafe fn patch_protmem() {
     });
     enter_or_exit_e8.expect_n(2);
     let leave = where_is_E8call_going(enter_or_exit_e8.locs[1] as _);
-
     good!("callsite of BNetSec::ProtMem::leave() @ 0x{:X}", leave);
 
-    // ---- cipher params ----
-
-    // ---- [new] their hash fn: first E8 after the leave call ----
+    // ---- finding hasn function ----
     let mut hash_e8 = scan("E8", (enter_or_exit_e8.locs[1] + 5) as _, 0x40);
     hash_e8 = hash_e8.filter(|addr| {
         let suspect_fn = where_is_E8call_going(addr as _);
         if is_real_memory(suspect_fn) {
             let asm = peek_disassembly(suspect_fn, 0x200);
-            let mut hashy_things: HashSet<Mnemonic> = vec![Mnemonic::Rol, Mnemonic::Xor, Mnemonic::Imul, Mnemonic::Bswap, Mnemonic::Shr, Mnemonic::Shl]
+            // find hash function by how many hashy instructions it has
+            let mut hashy: HashSet<Mnemonic> = vec![Mnemonic::Rol, Mnemonic::Xor, Mnemonic::Imul, Mnemonic::Bswap, Mnemonic::Shr, Mnemonic::Shl]
                 .into_iter()
                 .collect();
             for ins in asm {
-                hashy_things.remove(&ins.mnemonic());
+                hashy.remove(&ins.mnemonic());
             }
-            // all hashy things accounted for: super hashy
-            return hashy_things.len() == 0;
+            // all hashy things are utilized: the function is super hashy
+            return hashy.len() == 0;
         }
         false
     });
@@ -84,7 +82,7 @@ pub unsafe fn patch_protmem() {
     HASH_FN.store(hash_fn, SeqCst);
     good!("found hash function @ 0x{:X}", hash_fn);
 
-    // ---- [new] materialization-complete point → cipher params ----
+    // ---- crypto constants ----
     let memcpy_callsite = e8s.filter(|addr| {
         let func = where_is_E8call_going(addr as _) as *mut u8;
         let s = scan("FF 25", func, 2);
@@ -120,6 +118,7 @@ pub unsafe fn patch_protmem() {
         }
     }
 
+    // ---- hook ----
     match Hooker::new(leave, HookType::Retn(leave_hook), CallbackOption::None, 0, HookFlags::empty()).hook() {
         Err(e) => error!("[Hook] Failed to hook BNetSec::ProtMem::leave(): {}.", e),
         Ok(hook) => {
@@ -140,34 +139,32 @@ static HASH_FN: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(C)]
 pub struct DynFHMeta {
-    pub size: usize,                // +0x00 size
-    _pad_08: [u8; 8],               // +0x08..+0x10
-    pub ciphertext_hash: u64,       // +0x10 hash(​ciphertext shadow copy) — checked at materialization​, before decrypt
-    pub plaintext_hash: u64,        // +0x18 hash(​plaintext​) — checked at disarm​, right after leave()
-    pub rva: u64,                   // +0x20 RVA of the live region
-    _pad_28: [u8; 0x78],            // +0x28..+0xA0
-    pub rva_offset: u64,            // +0xA0 RVA offset due to stub. add this to 0x20 RVA to get real RVA
-    _pad_A8: [u8; 0x88],            // +0xA8..+0x130
+    pub size: usize,                    // +0x00 size
+    _idk_08: [u8; 8],                   //
+    pub ciphertext_hash: u64,           // +0x10 hash(​ciphertext shadow copy)
+    pub plaintext_hash: u64,            // +0x18 hash(​plaintext​)
+    pub rva: u64,                       // +0x20 RVA of the live region
+    _idk_28: [u8; 0x78],                //
+    pub rva_offset: u64,                // +0xA0 RVA offset due to stub. add this to 0x20 RVA to get real RVA
+    _idk_A8: [u8; 0x88],                //
     pub ciphertext_shadow_ptr: *mut u8, // +0x130 pointer to pristine ciphertext shadow copy
-    pub refcount: u64,              // +0x138 refcount (lock xadd, disarm at 0)
-    _pad_140: [u8; 0x10],           // +0x140..+0x150
-    pub protected: u8,              // +0x150 protected flag
+    pub refcount: u64,                  // +0x138 refcount (lock xadd, disarm at 0)
+    _idk_140: [u8; 0x10],               //
+    pub protected: u8,                  // +0x150 protected flag
 }
 
 unsafe extern "win64" fn leave_hook(regs: *mut Registers, ori_func_ptr: usize, _: usize) -> usize {
-    // original leave(): mandatory for classic regions, no-op for the DynFH body.
+    // original leave(): mandatory for classic regions, no-op for this DynFH region.
     let orig_leave = core::mem::transmute::<usize, unsafe extern "win64" fn(usize, usize)>(ori_func_ptr);
     orig_leave((*regs).rcx as _, (*regs).rdx as _);
 
     if ALREADY_PATCHED_ISNEXTBUCKETVALID.load(SeqCst) {
-        // already patched
         return 0;
     }
 
-    // meta
     let meta: *mut DynFHMeta = (*regs).rdx as _;
 
-    // seen: each meta is decrypted & scanned exactly once, ever.
+    // seen: so that each region is decrypted & scanned exactly once, ever.
     let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
     if !seen.lock().unwrap().insert(meta as usize) {
         return 0;
@@ -176,29 +173,31 @@ unsafe extern "win64" fn leave_hook(regs: *mut Registers, ori_func_ptr: usize, _
     // more info
     let meta_size = (*meta).size;
     let meta_va = (*meta).rva + (*meta).rva_offset;
-
     let key = (KEY_GLOBAL.load(SeqCst) as *const u64).read_unaligned();
     let mult = MULT.load(SeqCst);
     let shadow_ciphertext = slice::from_raw_parts((*meta).ciphertext_shadow_ptr, meta_size).to_vec();
 
+    // decrypt shadow -> plaintext
     let mut plaintext = shadow_ciphertext.clone();
-    dynfh_xor(&mut plaintext, key, mult); // decrypt shadow
+    dynfh_xor(&mut plaintext, key, mult);
+
+    // check if the plaintext function is `isNextBucketValid`
     let is_patched_out = check_for_and_patch_isNextBucketValid_PROTDR(plaintext.as_mut_ptr(), plaintext.len());
     if !is_patched_out {
-        return 0; // wrong meta; never scan this again
+        return 0; // wrong function. never scan this again
     }
     info!("leave(): decrypted isNextBucketValid region rva=0x{:X} size={}", meta_va, meta_size);
+    let new_plaintext = plaintext; // plaintext has been patched; renaming it for clarity.
 
-    let new_plaintext = plaintext; // plaintext is now patched below here, renaming it for clarity.
-
+    // re-encrypt new_plaintext -> new_ciphertext
     let mut new_ciphertext = new_plaintext.clone();
-    dynfh_xor(&mut new_ciphertext, key, mult); // re-encrypt
-    memwrite((*meta).ciphertext_shadow_ptr, &new_ciphertext); // 1) patched shadow: every future cycle is born patched
+    dynfh_xor(&mut new_ciphertext, key, mult);
 
-    // 2) live region, so THIS disarm's hash check sees bytes consistent with (3)
+    // write new texts
+    memwrite((*meta).ciphertext_shadow_ptr, &new_ciphertext);
     memwrite(meta_va as *mut u8, &new_plaintext);
 
-    // 3) expected hashes for every future check
+    // write new hashes
     let hash_fn = core::mem::transmute::<_, unsafe extern "win64" fn(*const u8, u64, u64) -> u64>(HASH_FN.load(SeqCst));
     let new_ciphertext_hash = hash_fn(new_ciphertext.as_ptr(), new_ciphertext.len() as u64, 0);
     let new_plaintext_hash = hash_fn(new_plaintext.as_ptr(), new_plaintext.len() as u64, 0);
@@ -230,8 +229,6 @@ pub unsafe fn dynfh_xor(buf: &mut [u8], keyval: u64, mult: u64) {
 
 // MARK: DFH patch
 unsafe fn check_for_and_patch_isNextBucketValid_PROTDR(start_of_decrypted_region: *mut u8, length_of_decrypted_region: usize) -> bool {
-    // info!("[Hook] Scanning for DFH.");
-
     let dfh1 = scan(
         // normal, like in build Yue Fei's Legacy
         concat!(

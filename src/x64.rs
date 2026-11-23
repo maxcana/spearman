@@ -1,7 +1,6 @@
 // x64.rs: jQuery-style robust pattern matching for x64 & helpers
 
 use iced_x86::{Decoder, DecoderOptions, Instruction};
-use ilhook::x64::Registers;
 use memchr::memmem;
 use std::{
     collections::HashSet,
@@ -129,29 +128,6 @@ impl x64Query {
         info!("[x64Query::within] {} -> {} locs", orig_locs.len(), x64.locs.len());
         x64
     }
-
-    // /// map each loc into another (or return 0 to discard) by reading the disassembly.
-    // ///
-    // /// same `bytes` usage as in `within()`: abs(bytes) = length of array to disassemble. same instruction ordering as `peek_disassembly`:
-    // ///
-    // /// - IF `bytes > 0`: the `Vec<Instruction>` in the closure is left-to-right
-    // ///
-    // /// - IF `bytes < 0`: the `Vec<Instruction>` in the closure is right-to-left
-    // pub unsafe fn map_via_disassembly(&self, new_locs_for_this_loc: impl Fn(usize, Vec<Instruction>) -> usize, bytes: isize) -> x64Query {
-    //     let mut x64 = self.clone();
-
-    //     let mut new_locs: Vec<usize> = x64.locs.clone();
-    //     for &loc in &x64.locs {
-    //         let res = new_locs_for_this_loc(loc, peek_disassembly(loc, bytes));
-    //         if res != 0 {
-    //             new_locs.push(res);
-    //         }
-    //     }
-
-    //     info!("[x64Query::filter] {} -> {} locs", x64.locs.len(), new_locs.len());
-    //     x64.locs = new_locs;
-    //     x64
-    // }
 }
 
 /// instruction ordering:
@@ -263,94 +239,6 @@ pub unsafe fn scan(pattern: &str, first_byte: *mut u8, len: usize) -> x64Query {
     }
 }
 
-// MARK: Resolving regs
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum Reg64 {
-    Rax,
-    Rcx,
-    Rdx,
-    Rbx,
-    Rsp,
-    Rbp,
-    Rsi,
-    Rdi,
-    R8,
-    R9,
-    R10,
-    R11,
-    R12,
-    R13,
-    R14,
-    R15,
-}
-
-impl Reg64 {
-    const fn from_idx(i: u8) -> Self {
-        match i & 0xF {
-            0 => Self::Rax,
-            1 => Self::Rcx,
-            2 => Self::Rdx,
-            3 => Self::Rbx,
-            4 => Self::Rsp,
-            5 => Self::Rbp,
-            6 => Self::Rsi,
-            7 => Self::Rdi,
-            8 => Self::R8,
-            9 => Self::R9,
-            10 => Self::R10,
-            11 => Self::R11,
-            12 => Self::R12,
-            13 => Self::R13,
-            14 => Self::R14,
-            _ => Self::R15,
-        }
-    }
-}
-
-pub fn mov_rdx_reg_WHICHREG(b: [u8; 3]) -> Option<Reg64> {
-    let [rex, op, modrm] = b;
-    let w = (rex >> 3) & 1;
-    let r = (rex >> 2) & 1;
-    let b_bit = rex & 1;
-
-    if (rex & 0xF0) != 0x40 || w != 1 || op != 0x8B {
-        return None;
-    }
-
-    let mod_bits = (modrm >> 6) & 0b11;
-    let reg_bits = (modrm >> 3) & 0b111;
-    let rm_bits = modrm & 0b111;
-
-    // Register-direct mode (mod == 11) and destination must be RDX (index 2).
-    if mod_bits != 0b11 || ((r << 3) | reg_bits) != 2 {
-        return None;
-    }
-
-    Some(Reg64::from_idx((b_bit << 3) | rm_bits))
-}
-
-pub unsafe fn read_reg(regs: *mut Registers, reg: Reg64) -> u64 {
-    match reg {
-        Reg64::Rax => (*regs).rax,
-        Reg64::Rcx => (*regs).rcx,
-        Reg64::Rdx => (*regs).rdx,
-        Reg64::Rbx => (*regs).rbx,
-        Reg64::Rsp => (*regs).rsp,
-        Reg64::Rbp => (*regs).rbp,
-        Reg64::Rsi => (*regs).rsi,
-        Reg64::Rdi => (*regs).rdi,
-        Reg64::R8 => (*regs).r8,
-        Reg64::R9 => (*regs).r9,
-        Reg64::R10 => (*regs).r10,
-        Reg64::R11 => (*regs).r11,
-        Reg64::R12 => (*regs).r12,
-        Reg64::R13 => (*regs).r13,
-        Reg64::R14 => (*regs).r14,
-        Reg64::R15 => (*regs).r15,
-    }
-}
-
 // MARK: Helpers
 
 /// write new bytes, automatically handle VirtualProtect calls
@@ -364,7 +252,7 @@ pub unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) {
     // write the pattern back
     addr.copy_from_nonoverlapping(new_bytes.as_ptr(), new_bytes.len());
     if new_bytes.len() <= 25 {
-        info!("Replaced {} bytes with {:02X?}.", new_bytes.len(), new_bytes );
+        info!("Replaced {} bytes with {:02X?}.", new_bytes.len(), new_bytes);
     } else {
         info!("Replaced {} bytes with {}, ... ].", new_bytes.len(), format!("{:02X?}", &new_bytes[0..25]).trim_end_matches("]"));
     }
@@ -388,53 +276,5 @@ pub unsafe fn where_is_E8call_going(e8_byte: *const u8) -> usize {
     let place = e8_byte.add(5).offset(rel as isize) as usize;
 
     // info!("[where_is_E8call_going] E8 @ 0x{:X} -> call 0x{:X}", e8_byte as usize, place);
-    place
-}
-
-pub fn make_E9_jmp(addr_of_e9: usize, jmp_to: usize) -> Result<[u8; 5], ()> {
-    let mut arr: [u8; 5] = [0xE9, 0x00, 0x00, 0x00, 0x00];
-    let rel = jmp_to.wrapping_sub(addr_of_e9 + 5) as isize;
-    let rel32 = i32::try_from(rel);
-    if rel32.is_err() {
-        error!("[make_E9_jmp] target out of rel32 range");
-        return Err(());
-    }
-
-    arr[1..5].copy_from_slice(&rel32.unwrap().to_le_bytes());
-    info!("[make_E9_jmp] Encoded jmp rel32: {:02X?}", arr);
-
-    Ok(arr)
-}
-pub fn make_0F85_jnz(addr_of_0f: usize, jmp_to: usize) -> Result<[u8; 6], ()> {
-    let mut arr: [u8; 6] = [0x0F, 0x85, 0x00, 0x00, 0x00, 0x00];
-    let rel = jmp_to.wrapping_sub(addr_of_0f + 6) as isize;
-    let rel32 = i32::try_from(rel);
-    if rel32.is_err() {
-        error!("[make_0FB5_jnz] target out of rel32 range");
-        return Err(());
-    }
-
-    arr[2..6].copy_from_slice(&rel32.unwrap().to_le_bytes());
-    info!("[make_0FB5_jnz] Encoded jnz rel32: {:02X?}", arr);
-
-    Ok(arr)
-}
-
-/// FF 25 = jmp [rip+rel32].
-/// gives absolute address of sub
-pub unsafe fn where_is_FF25jmp_going(FF_byte: *const u8) -> usize {
-    let rel = (FF_byte.add(2) as *const i32).read_unaligned();
-    let place = (FF_byte.add(6).offset(rel as isize) as *const usize).read_unaligned();
-
-    // info!("[where_is_FF25jmp_going] FF25 @ 0x{:X} -> jmp 0x{:X}", FF_byte as usize, place);
-    place
-}
-
-/// 0F 85 = jnz rip+rel32.
-/// gives absolute address of sub
-pub unsafe fn where_is_0F85jne_going(_0F_byte: *const u8) -> usize {
-    let rel = (_0F_byte.add(2) as *const i32).read_unaligned();
-    let place = _0F_byte.add(6).offset(rel as isize) as usize;
-
     place
 }

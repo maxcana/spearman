@@ -12,11 +12,9 @@ use std::{
 
 use ilhook::x64::{CallbackOption, HookFlags, HookType, Hooker, Registers};
 use winapi::um::{
-    memoryapi::VirtualAlloc,
     processthreadsapi::*,
     psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO},
-    wincon::FreeConsole,
-    winnt::{LPSTR, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE},
+    winnt::LPSTR,
 };
 use winapi::{ctypes::c_void, shared::minwindef::HMODULE};
 use windows::{
@@ -24,9 +22,8 @@ use windows::{
     core::{PCSTR, s},
 };
 
-use crate::{mem, val::VERSION_DLL_NAME};
-#[macro_use]
-use crate::{log, val::PATCH_AT_DLL};
+use crate::val::PATCH_AT_DLL;
+use crate::val::VERSION_DLL_NAME;
 pub struct Modu {
     pub hmodule: HMODULE,
     pub info: MODULEINFO,
@@ -180,30 +177,6 @@ pub unsafe fn hook_console() {
     }
 }
 
-// MARK: Caving
-const PAGE_SIZE: usize = 0x1000;
-const SEARCH_RANGE: i64 = 0x7FFF_0000; // stay safely under 2GB, leave margin for the disp itself
-
-pub unsafe fn find_cave_near(target: usize) -> Option<*mut u8> {
-    for i in 1..(SEARCH_RANGE as usize / PAGE_SIZE) {
-        for sign in [1i64, -1i64] {
-            let candidate = (target as i64 + sign * (i as i64) * PAGE_SIZE as i64) as usize;
-            // must not overflow, must land on a page boundary
-            let candidate = candidate & !(PAGE_SIZE - 1);
-            let ptr = VirtualAlloc(
-                candidate as *mut c_void,
-                PAGE_SIZE,
-                MEM_RESERVE | MEM_COMMIT,
-                PAGE_EXECUTE_READWRITE, // or PAGE_READWRITE then flip later
-            );
-            if !ptr.is_null() {
-                return Some(ptr as *mut u8);
-            }
-        }
-    }
-    None
-}
-
 // MARK: Forwarder
 // interacting with the windows API through rust is incredibly painful
 
@@ -214,7 +187,7 @@ pub unsafe fn load_orig_dll() {
     let name_c = CString::new(VERSION_DLL_NAME).unwrap();
     match LoadLibraryA(PCSTR(name_c.as_ptr() as _)) {
         Ok(handle) => H_ORIGDLL.store(handle.0, SeqCst),
-        Err(e) => die!("[FWD] Failed to find {}. Ensure that it is in the game folder; next to this dll.", VERSION_DLL_NAME),
+        Err(_) => die!("[FWD] Failed to find {}. Ensure that it is in the game folder; next to this dll.", VERSION_DLL_NAME),
     }
 }
 
