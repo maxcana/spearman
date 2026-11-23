@@ -1,5 +1,6 @@
 // x64.rs: jQuery-style robust pattern matching for x64 & helpers
 
+use iced_x86::{Decoder, DecoderOptions, Instruction};
 use ilhook::x64::Registers;
 use memchr::memmem;
 use std::{
@@ -21,13 +22,10 @@ impl x64Query {
     pub fn one(&self) -> bool {
         self.locs.len() == 1
     }
-    pub fn first(&self) -> Result<*mut u8, ()> {
-        if self.locs.len() > 0 { Ok(self.locs[0] as *mut u8) } else { Err(()) }
-    }
-    pub fn first_as_x64query(&self) -> Result<x64Query, ()> {
-        if self.locs.len() > 0 {
+    pub fn eq(&self, n: usize) -> Result<x64Query, ()> {
+        if self.locs.len() > n {
             let mut x64 = self.clone();
-            x64.locs = vec![self.locs[0]];
+            x64.locs = vec![self.locs[n]];
             Ok(x64)
         } else {
             Err(())
@@ -35,7 +33,7 @@ impl x64Query {
     }
     pub unsafe fn patch(&self, REPLACEMENT: &[u8]) -> bool {
         if self.one() {
-            memwrite(self.first().unwrap(), REPLACEMENT);
+            memwrite(self.locs[0] as _, REPLACEMENT);
             good!("Patched {} B successfully.", REPLACEMENT.len());
             true
         } else {
@@ -131,6 +129,51 @@ impl x64Query {
         info!("[x64Query::within] {} -> {} locs", orig_locs.len(), x64.locs.len());
         x64
     }
+
+    // /// map each loc into another (or return 0 to discard) by reading the disassembly.
+    // ///
+    // /// same `bytes` usage as in `within()`: abs(bytes) = length of array to disassemble. same instruction ordering as `peek_disassembly`:
+    // ///
+    // /// - IF `bytes > 0`: the `Vec<Instruction>` in the closure is left-to-right
+    // ///
+    // /// - IF `bytes < 0`: the `Vec<Instruction>` in the closure is right-to-left
+    // pub unsafe fn map_via_disassembly(&self, new_locs_for_this_loc: impl Fn(usize, Vec<Instruction>) -> usize, bytes: isize) -> x64Query {
+    //     let mut x64 = self.clone();
+
+    //     let mut new_locs: Vec<usize> = x64.locs.clone();
+    //     for &loc in &x64.locs {
+    //         let res = new_locs_for_this_loc(loc, peek_disassembly(loc, bytes));
+    //         if res != 0 {
+    //             new_locs.push(res);
+    //         }
+    //     }
+
+    //     info!("[x64Query::filter] {} -> {} locs", x64.locs.len(), new_locs.len());
+    //     x64.locs = new_locs;
+    //     x64
+    // }
+}
+
+/// instruction ordering:
+///
+/// - IF `bytes > 0`: the `Vec<Instruction>` in the closure is left-to-right
+///
+/// - IF `bytes < 0`: the `Vec<Instruction>` in the closure is right-to-left
+pub unsafe fn peek_disassembly(loc: usize, bytes: isize) -> Vec<Instruction> {
+    let slice = if bytes > 0 {
+        core::slice::from_raw_parts(loc as *mut u8, bytes as usize)
+    } else {
+        core::slice::from_raw_parts((loc as *mut u8).offset(bytes + 1), (-bytes) as usize)
+    };
+
+    let mut instrs: Vec<Instruction> = Decoder::with_ip(64, slice, loc as u64, DecoderOptions::NONE).iter().collect();
+    // sort it so nearest instructions are first
+    instrs.sort_by(|a, b| {
+        let a_dist = a.ip().abs_diff(loc as _);
+        let b_dist = b.ip().abs_diff(loc as _);
+        (&a_dist).cmp(&b_dist)
+    });
+    instrs
 }
 
 // MARK: Scan
@@ -328,8 +371,6 @@ pub unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) {
         error!("Failed to revert protection level. It will stay as PAGE_EXECUTE_READWRITE.")
     };
 }
-
-
 
 // MARK: Assembly
 

@@ -5,8 +5,11 @@ use crate::{
     val::{NOP, TARGET},
     win::{Modu, find_cave_near, find_module},
 };
+use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind};
 use ilhook::x64::{CallbackOption, HookFlags, HookType, Hooker, Registers};
-use std::sync::atomic::AtomicU8;
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize};
+use std::sync::{Mutex, OnceLock};
 use std::{
     ptr, slice,
     sync::atomic::{AtomicPtr, Ordering::SeqCst},
@@ -23,8 +26,7 @@ pub unsafe fn patch_sigcheck() {
     ]);
 }
 
-static REGISTER_THAT_HOLDS_META: AtomicU8 = AtomicU8::new(0);
-
+// MARK: patch_protmem
 pub unsafe fn patch_protmem() {
     // ---- finding KiUserDispatcher_In_C ----
     info!("Finding KiUserDispatcher_In_ASM...");
@@ -32,11 +34,11 @@ pub unsafe fn patch_protmem() {
         "50 53 51 52 57 56 41 50 41 51 41 52 41 53 41 54 41 55", // push rax; push rbx; push rcx; push rdx; push rdi; push rsi; push r8; push r9; push r10; push r11; push r12; push r13; push r14; push r15; push rbp
     );
     ki_asm_mid.expect_one();
-    good!("KiUserDispatcher_In_ASM @ ~0x{:X}", ki_asm_mid.first().unwrap() as usize);
+    good!("KiUserDispatcher_In_ASM @ ~0x{:X}", ki_asm_mid.locs[0]);
 
     info!("Finding KiUserDispatcher_In_C...");
-    let ki_in_c_call = ki_asm_mid.within("E8", 0x50).first().unwrap();
-    let ki_in_c = where_is_E8call_going(ki_in_c_call);
+    let ki_in_c_call = ki_asm_mid.within("E8", 0x50).locs[0];
+    let ki_in_c = where_is_E8call_going(ki_in_c_call as _);
     good!("KiUserDispatcher_In_C @ 0x{:X}", ki_in_c as usize);
 
     let e8s = scan("E8", ki_in_c as _, 7336).filter(|addr| {
@@ -45,8 +47,8 @@ pub unsafe fn patch_protmem() {
         // they at least point to valid reliccardinal memory
         is_real_memory(where_is_E8call_going(addr as _))
     });
-    // ---- finding callsite of BNetSec::ProtMem::enter() ----
-    info!("Finding KiUserDispatcher_In_C :: callsite of BNetSec::ProtMem::enter()...");
+    // ---- finding BNetSec::ProtMem::leave() ----
+    info!("Finding KiUserDispatcher_In_C :: callsite of BNetSec::ProtMem::leave()...");
     let enter_or_exit_e8 = e8s.filter(|addr| {
         let place = where_is_E8call_going(addr as _);
         let is_ProtMem_enter_prologue = scan("48 85 D2 0F 84", place as _, 5).one(); // test rdx, rdx; jz
@@ -54,104 +56,152 @@ pub unsafe fn patch_protmem() {
         is_ProtMem_enter_prologue
     });
     enter_or_exit_e8.expect_n(2);
-    let enter_e8 = enter_or_exit_e8.first_as_x64query().unwrap();
-    let callsite_of_enter = enter_e8.first().unwrap() as usize;
+    let leave = where_is_E8call_going(enter_or_exit_e8.locs[1] as _);
 
-    good!("callsite of BNetSec::ProtMem::enter() @ 0x{:X}", callsite_of_enter);
+    good!("callsite of BNetSec::ProtMem::leave() @ 0x{:X}", leave);
 
-    // ---- finding which register stores _DynFHMeta ----
-    info!("Finding the register that stores _DynFHMeta...");
-    info!("Searching for previous mov instructions...");
-    let mut movs = enter_e8.within("8B", -10);
-    movs = movs.filter(|addr| {
-        let triplet_addr = addr - 1;
-        let triplet: [u8; 3] = slice::from_raw_parts(triplet_addr as *mut u8, 3).try_into().unwrap();
-        let res = mov_rdx_reg_WHICHREG(triplet);
-        res.is_some()
+    // ---- cipher params ----
+
+    // ---- [new] their hash fn: first E8 after the leave call ----
+    let mut hash_e8 = scan("E8", (enter_or_exit_e8.locs[1] + 5) as _, 0x40);
+    hash_e8 = hash_e8.filter(|addr| {
+        let suspect_fn = where_is_E8call_going(addr as _);
+        if is_real_memory(suspect_fn) {
+            let asm = peek_disassembly(suspect_fn, 0x200);
+            let mut hashy_things: HashSet<Mnemonic> = vec![Mnemonic::Rol, Mnemonic::Xor, Mnemonic::Imul, Mnemonic::Bswap, Mnemonic::Shr, Mnemonic::Shl].into_iter().collect();
+            for ins in asm {
+                hashy_things.remove(&ins.mnemonic());
+            }
+            // all hashy things accounted for: super hashy
+            return hashy_things.len() == 0
+        }
+        false
     });
-    movs.expect_one();
-    let triplet_addr = movs.first().unwrap().offset(-1);
-    let triplet: [u8; 3] = slice::from_raw_parts(triplet_addr, 3).try_into().unwrap();
-    let reg = mov_rdx_reg_WHICHREG(triplet).unwrap();
-    REGISTER_THAT_HOLDS_META.store(reg as _, SeqCst);
-    good!("_DynFHMeta register is {:?}.", reg);
+    hash_e8.expect_one();
+    let hash_fn = where_is_E8call_going(hash_e8.locs[0] as _);
+    HASH_FN.store(hash_fn, SeqCst);
+    good!("found hash function @ 0x{:X}", hash_fn);
 
-    // ---- finding _PROTDR decrypted place ----
-    info!("Finding KiUserDispatcher_In_C :: _PROTDR decrypted place...");
-    let jmpstub_e8s = e8s.filter(|addr| {
-        let place = where_is_E8call_going(addr as _);
-
-        let is_indirectjmp_stub = scan("FF 25", place as _, 2).one();
-
-        is_indirectjmp_stub
+    // ---- [new] materialization-complete point → cipher params ----
+    let memcpy_callsite = e8s.filter(|addr| {
+        let func = where_is_E8call_going(addr as _) as *mut u8;
+        let s = scan("FF 25", func, 2);
+        s.one()
     });
-    // could filter e8s even more, ensuring that its definitely memcpy by resolving it from vcruntime and comparing the FF25[] address to vcruntime memcpy
-    jmpstub_e8s.expect_one();
-    let memcpy = jmpstub_e8s.first().unwrap();
-    let decryption_complete = scan("?? 80 ?? 17 0F 85 ?? ?? ?? ??", memcpy, 150); // cmp RXX, 0x17; jne near __
-    decryption_complete.expect_one();
-    let hook = decryption_complete.first().unwrap() as usize;
-    good!("_PROTDR decrypted place @ 0x{:X}", hook);
+    memcpy_callsite.expect_one();
 
-    // ---- hook ----
-    // we replace those 10 bytes inside KiUserDispatcher_In_C with a 5-byte "jmp rel32" into a nearby cave;
-    // in that nearby cave, we place a 4,000 byte gap; followed by the 2 lost instructions overwritten by the hook; then a jmp: back to KiUserDispatcher_In_C right after the hook bytes.
-    //
-    // then we use ilhook, to "hook" the cave, basically redirecting to ki_hook, then back to the cave
-    info!("[Hook] Preparing to emplace hook at where _PROTDR is decrypted.");
+    let asm = peek_disassembly(memcpy_callsite.locs[0], 0x40);
+    for (i, ins) in asm.iter().enumerate() {
+        if !(ins.mnemonic() == Mnemonic::Xor && ins.op_kind(0) == OpKind::Register) {
+            continue;
+        }
+        let xor = ins;
 
-    let cave = find_cave_near(hook).unwrap_or_else(|| die!("failed to find a cave near 0x{:X}", hook));
-    info!("[Hook] Found a nearby cave at 0x{:X}", cave as usize);
+        let rax = xor.op0_register();
 
-    // populate cave
-    info!("[Hook] Resolving where jnz (0F 85) is going...");
-    let jnz_addr = where_is_0F85jne_going((hook as *mut u8).add(4));
-    let mut cave_fill = [0x90u8; 4096];
-    cave_fill[0..4].copy_from_slice(slice::from_raw_parts(hook as _, 4).try_into().unwrap());
-    cave_fill[4085..4091].copy_from_slice(&make_0F85_jnz(cave.add(4085) as _, jnz_addr).unwrap());
-    cave_fill[4091..4096].copy_from_slice(&make_E9_jmp(cave.add(4091) as _, hook + 10).unwrap_or_else(|_| die!("hook too far away, failed to jmp back rel32")));
-    memwrite(cave, &cave_fill);
-    good!("[Hook] Filled cave @ 0x{:X} with {:02X?}.", cave as usize, cave_fill);
+        let mov = asm[i + 1];
+        if mov.mnemonic() == Mnemonic::Mov && mov.op1_kind() == OpKind::Immediate64 {
+            let r8 = mov.op0_register();
+            let imul = asm[i + 2];
+            if imul.mnemonic() == Mnemonic::Imul && imul.op0_register() == rax && imul.op1_register() == r8 {
+                // we found an XOR with a MOV and an IMUL right after it
+                let key = xor.ip_rel_memory_address() as _;
+                let mult = mov.immediate64();
+                KEY_GLOBAL.store(key, SeqCst);
+                MULT.store(mult, SeqCst);
+                good!("found crypto constants: key=0x{:X}, mult=0x{:X}", key, mult);
+                break;
+            }
+        }
+        if i == asm.len() - 1 {
+            die!("couldn't find crypto constants");
+        }
+    }
 
-    // patch KiUserDispatcher_In_C
-    let jmp_rel32: [u8; 5] = make_E9_jmp(hook, cave as _).unwrap_or_else(|_| die!("cave too far away, failed to jmp out rel32"));
-    let mut new_bytes = [0xCCu8; 10];
-    new_bytes[0..5].copy_from_slice(&jmp_rel32);
-    memwrite(hook as *mut u8, &new_bytes);
-    good!("[Hook] Hook bytes applied @ 0x{:X}: {:02X?}", hook, new_bytes);
+    // sanity: KEY_GLOBAL should be RVA 0x7C9F990 in this build; verify and warn on drift
 
-    match Hooker::new(cave as usize + 10, HookType::Retn(ki_hook), CallbackOption::None, 0, HookFlags::empty()).hook() {
-        Err(e) => error!("[Hook] Failed to \"hook\" the cave: {}.", e),
+    match Hooker::new(leave, HookType::Retn(leave_hook), CallbackOption::None, 0, HookFlags::empty()).hook() {
+        Err(e) => error!("[Hook] Failed to hook BNetSec::ProtMem::leave(): {}.", e),
         Ok(hook) => {
-            good!("[Hook] Successfully \"hook\"ed the cave.");
+            good!("[Hook] Successfully hooked BNetSec::ProtMem::leave().");
             core::mem::forget(hook) // never unhook
         }
     }
 }
 
-unsafe extern "win64" fn ki_hook(regs: *mut Registers, ori_func_ptr: usize, _: usize) -> usize {
-    let the_reg: Reg64 = std::mem::transmute(REGISTER_THAT_HOLDS_META.load(SeqCst));
+// MARK: leave_hook
+static SEEN: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+static ALREADY_PATCHED_ISNEXTBUCKETVALID: AtomicBool = AtomicBool::new(false);
 
-    let DynFHMeta_ptr = read_reg(regs, the_reg) as *mut u8;
+// crypto constants
+static MULT: AtomicU64 = AtomicU64::new(0);
+static KEY_GLOBAL: AtomicUsize = AtomicUsize::new(0); // address of the key qword
+static HASH_FN: AtomicUsize = AtomicUsize::new(0);
 
-    let size = (DynFHMeta_ptr.add(0x00) as *const u64).read_unaligned();
-    let rva = (DynFHMeta_ptr.add(0x20) as *const u64).read_unaligned();
+unsafe extern "win64" fn leave_hook(regs: *mut Registers, ori_func_ptr: usize, _: usize) -> usize {
+    // original leave(): mandatory for classic regions, no-op for the DynFH body.
+    let orig_leave = core::mem::transmute::<usize, unsafe extern "win64" fn(usize, usize)>(ori_func_ptr);
+    orig_leave((*regs).rcx as _, (*regs).rdx as _);
 
-    // we can only patch DFH (isNextBucketValid_PROTDR) while it is unencrypted, because of new _PROTDR protection.
-    check_for_and_patch_dfh(rva as _, size as usize);
-    (*regs).rax as usize
+    if ALREADY_PATCHED_ISNEXTBUCKETVALID.load(SeqCst) {
+        // already patched
+        return 0;
+    }
+
+    let meta = (*regs).rdx as *mut u8;
+    let meta_size = (meta.add(0x00) as *const u64).read_unaligned() as usize;
+    let meta_rva = (meta.add(0x20) as *const u64).read_unaligned() as usize;
+
+    info!("leave(): decrypted region rva=0x{:X} size={}", meta_rva, meta_size);
+
+    // seen: each meta is decrypted & scanned exactly once, ever.
+    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    if !seen.lock().unwrap().insert(meta as usize) {
+        return 0;
+    }
+    let size = meta.cast::<u64>().read_unaligned() as usize;
+    let keyval = (KEY_GLOBAL.load(SeqCst) as *const u64).read_unaligned();
+    let mult = MULT.load(SeqCst);
+    let mut plain = slice::from_raw_parts(meta.add(0x130), size).to_vec();
+    dynfh_xor(&mut plain, keyval, mult); // decrypt shadow
+    if !check_for_and_patch_isNextBucketValid_PROTDR(plain.as_mut_ptr(), plain.len()) {
+        return 0; // wrong meta; never scanned again
+    }
+
+    let patched = plain.clone(); // keep the patched plaintext
+    dynfh_xor(&mut plain, keyval, mult); // re-encrypt
+    memwrite(meta.add(0x130), &plain); // 1) shadow: every future cycle is born patched
+    // 2) live region, so THIS disarm's hash check sees bytes consistent with (3)
+    let region = meta.add(0xA0).cast::<*const u8>().read_unaligned() as usize + meta.add(0x20).cast::<u64>().read_unaligned() as usize;
+    memwrite(region as *mut u8, &patched);
+    // 3) expected hash for every future check
+    let hash = core::mem::transmute::<_, unsafe extern "win64" fn(*const u8, u64, u64) -> u64>(HASH_FN.load(SeqCst))(patched.as_ptr(), patched.len() as u64, 0);
+    meta.add(0x18).cast::<u64>().write_unaligned(hash);
+
+    ALREADY_PATCHED_ISNEXTBUCKETVALID.store(true, SeqCst);
+    good!("isNextBucketValid_PROTDR shadow-patched; hash consistent.");
+    0
 }
 
-static mut ALREADY_PATCHED_OUT_DFH: bool = false;
-
-// "DFH"="Data-flow-hashing" anti-tamper protection. this is an archaic term guessed from Aegis_RelicCardinal.log.
-// that "DFH" most likely really refers to "Delayed Function Hiding"
-// the canonical, correct name for "DFH" is BNetSec::TamperedMemoryDetection::isNextBucketValid_PROTDR
-// but i still use DFH since it's engrained into me
-unsafe fn check_for_and_patch_dfh(start_of_decrypted_region: *mut u8, length_of_decrypted_region: usize) {
-    if ALREADY_PATCHED_OUT_DFH {
-        return;
+// MARK: cipher
+// Involution: E == D. key0 = (size ^ KEYVAL) * MULT, then key *= MULT per qword.
+pub unsafe fn dynfh_xor(buf: &mut [u8], keyval: u64, mult: u64) {
+    let mut key = (buf.len() as u64 ^ keyval).wrapping_mul(mult);
+    for chunk in buf.chunks_exact_mut(8) {
+        for (b, k) in chunk.iter_mut().zip(key.to_le_bytes()) {
+            *b ^= k;
+        }
+        key = key.wrapping_mul(mult);
     }
+    let len = buf.len();
+    for b in &mut buf[len / 8 * 8..] {
+        *b ^= key as u8;
+        key >>= 8;
+    }
+}
+
+// MARK: DFH patch
+unsafe fn check_for_and_patch_isNextBucketValid_PROTDR(start_of_decrypted_region: *mut u8, length_of_decrypted_region: usize) -> bool {
     // info!("[Hook] Scanning for DFH.");
 
     let dfh1 = scan(
@@ -193,11 +243,12 @@ unsafe fn check_for_and_patch_dfh(start_of_decrypted_region: *mut u8, length_of_
             ]);
         }
 
-        ALREADY_PATCHED_OUT_DFH = true;
         good!("BNetSec::TamperedMemoryDetection::isNextBucketValid_PROTDR patched out successfully.");
         crate::on_dfh_patched();
+        true
     } else {
         // info!("Wasted {}ms scanning for isNextBucketValid_PROTDR", (dfh1.wasted + dfh2.wasted).as_millis())
+        false
     }
 }
 
