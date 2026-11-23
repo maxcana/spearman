@@ -3,7 +3,7 @@
 use crate::x64::*;
 use crate::{
     val::{NOP, TARGET},
-    win::{Modu, find_module},
+    win::{Modu, find_cave_near, find_module},
 };
 use ilhook::x64::{CallbackOption, HookFlags, HookType, Hooker, Registers};
 use std::sync::atomic::AtomicU8;
@@ -53,7 +53,7 @@ pub unsafe fn patch_protmem() {
 
         is_ProtMem_enter_prologue
     });
-    enter_or_exit_e8.expect_n(1);
+    enter_or_exit_e8.expect_n(2);
     let enter_e8 = enter_or_exit_e8.first_as_x64query().unwrap();
     let callsite_of_enter = enter_e8.first().unwrap() as usize;
 
@@ -88,23 +88,48 @@ pub unsafe fn patch_protmem() {
     // could filter e8s even more, ensuring that its definitely memcpy by resolving it from vcruntime and comparing the FF25[] address to vcruntime memcpy
     jmpstub_e8s.expect_one();
     let memcpy = jmpstub_e8s.first().unwrap();
-    let decryption_complete = scan("?? 80 ?? 17", memcpy, 140);
+    let decryption_complete = scan("?? 80 ?? 17 0F 85 ?? ?? ?? ??", memcpy, 150); // cmp RXX, 0x17; jne near __
     decryption_complete.expect_one();
-    let decrypted = decryption_complete.first().unwrap() as usize;
-    good!("_PROTDR decrypted place @ 0x{:X}", decrypted);
+    let hook = decryption_complete.first().unwrap() as usize;
+    good!("_PROTDR decrypted place @ 0x{:X}", hook);
 
     // ---- hook ----
-    info!("[Hook] Hooking KiUserDispatcher_In_C at the place _PROTDR is decrypted.");
-    match Hooker::new(decrypted, HookType::JmpBack(ki_hook), CallbackOption::None, 0, HookFlags::empty()).hook() {
-        Err(e) => error!("[Hook] Failed to hook enter: {}.", e),
+    // we replace those 10 bytes inside KiUserDispatcher_In_C with a 5-byte "jmp rel32" into a nearby cave;
+    // in that nearby cave, we place a 4,000 byte gap; followed by the 2 lost instructions overwritten by the hook; then a jmp: back to KiUserDispatcher_In_C right after the hook bytes.
+    //
+    // then we use ilhook, to "hook" the cave, basically redirecting to ki_hook, then back to the cave
+    info!("[Hook] Preparing to emplace hook at where _PROTDR is decrypted.");
+
+    let cave = find_cave_near(hook).unwrap_or_else(|| die!("failed to find a cave near 0x{:X}", hook));
+    info!("[Hook] Found a nearby cave at 0x{:X}", cave as usize);
+
+    // populate cave
+    info!("[Hook] Resolving where jnz (0F 85) is going...");
+    let jnz_addr = where_is_0F85jne_going((hook as *mut u8).add(4));
+    let mut cave_fill = [0x90u8; 4096];
+    cave_fill[0..4].copy_from_slice(slice::from_raw_parts(hook as _, 4).try_into().unwrap());
+    cave_fill[4085..4091].copy_from_slice(&make_0F85_jnz(cave.add(4085) as _, jnz_addr).unwrap());
+    cave_fill[4091..4096].copy_from_slice(&make_E9_jmp(cave.add(4091) as _, hook + 10).unwrap_or_else(|_| die!("hook too far away, failed to jmp back rel32")));
+    memwrite(cave, &cave_fill);
+    good!("[Hook] Filled cave @ 0x{:X} with {:02X?}.", cave as usize, cave_fill);
+
+    // patch KiUserDispatcher_In_C
+    let jmp_rel32: [u8; 5] = make_E9_jmp(hook, cave as _).unwrap_or_else(|_| die!("cave too far away, failed to jmp out rel32"));
+    let mut new_bytes = [0xCCu8; 10];
+    new_bytes[0..5].copy_from_slice(&jmp_rel32);
+    memwrite(hook as *mut u8, &new_bytes);
+    good!("[Hook] Hook bytes applied @ 0x{:X}: {:02X?}", hook, new_bytes);
+
+    match Hooker::new(cave as usize + 10, HookType::Retn(ki_hook), CallbackOption::None, 0, HookFlags::empty()).hook() {
+        Err(e) => error!("[Hook] Failed to \"hook\" the cave: {}.", e),
         Ok(hook) => {
-            good!("[Hook] Successfully hooked enter.");
-            core::mem::forget(hook); // never unhook
+            good!("[Hook] Successfully \"hook\"ed the cave.");
+            core::mem::forget(hook) // never unhook
         }
     }
 }
 
-unsafe extern "win64" fn ki_hook(regs: *mut Registers, ori_func_ptr: usize) {
+unsafe extern "win64" fn ki_hook(regs: *mut Registers, ori_func_ptr: usize, _: usize) -> usize {
     let the_reg: Reg64 = std::mem::transmute(REGISTER_THAT_HOLDS_META.load(SeqCst));
 
     let DynFHMeta_ptr = read_reg(regs, the_reg) as *mut u8;
@@ -114,6 +139,7 @@ unsafe extern "win64" fn ki_hook(regs: *mut Registers, ori_func_ptr: usize) {
 
     // we can only patch DFH (isNextBucketValid_PROTDR) while it is unencrypted, because of new _PROTDR protection.
     check_for_and_patch_dfh(rva as _, size as usize);
+    (*regs).rax as usize
 }
 
 static mut ALREADY_PATCHED_OUT_DFH: bool = false;

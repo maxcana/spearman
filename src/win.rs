@@ -12,10 +12,11 @@ use std::{
 
 use ilhook::x64::{CallbackOption, HookFlags, HookType, Hooker, Registers};
 use winapi::um::{
+    memoryapi::VirtualAlloc,
     processthreadsapi::*,
     psapi::{EnumProcessModules, GetModuleBaseNameA, GetModuleInformation, MODULEINFO},
     wincon::FreeConsole,
-    winnt::LPSTR,
+    winnt::{LPSTR, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE},
 };
 use winapi::{ctypes::c_void, shared::minwindef::HMODULE};
 use windows::{
@@ -177,6 +178,30 @@ pub unsafe fn hook_console() {
             core::mem::forget(hook) // never unhook
         }
     }
+}
+
+// MARK: Caving
+const PAGE_SIZE: usize = 0x1000;
+const SEARCH_RANGE: i64 = 0x7FFF_0000; // stay safely under 2GB, leave margin for the disp itself
+
+pub unsafe fn find_cave_near(target: usize) -> Option<*mut u8> {
+    for i in 1..(SEARCH_RANGE as usize / PAGE_SIZE) {
+        for sign in [1i64, -1i64] {
+            let candidate = (target as i64 + sign * (i as i64) * PAGE_SIZE as i64) as usize;
+            // must not overflow, must land on a page boundary
+            let candidate = candidate & !(PAGE_SIZE - 1);
+            let ptr = VirtualAlloc(
+                candidate as *mut c_void,
+                PAGE_SIZE,
+                MEM_RESERVE | MEM_COMMIT,
+                PAGE_EXECUTE_READWRITE, // or PAGE_READWRITE then flip later
+            );
+            if !ptr.is_null() {
+                return Some(ptr as *mut u8);
+            }
+        }
+    }
+    None
 }
 
 // MARK: Forwarder

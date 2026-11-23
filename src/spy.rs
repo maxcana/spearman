@@ -12,6 +12,11 @@ fn get_log_path() -> Result<PathBuf, u64> {
             return Err(1);
         }
     };
+    // check all 
+    // vec![
+    //     PathBuf::from(&userdir).join("Documents").join("My Games").join("Age of Empires IV").join("warnings.log"),
+    //     PathBuf::from(&userdir).join("OneDrive").join("Documents").join("My Games").join("Age of Empires IV").join("warnings.log"),
+    // ]
     Ok(PathBuf::from(userdir).join("Documents").join("My Games").join("Age of Empires IV").join("warnings.log"))
 }
 

@@ -311,7 +311,7 @@ pub unsafe fn read_reg(regs: *mut Registers, reg: Reg64) -> u64 {
 // MARK: Helpers
 
 /// write new bytes, automatically handle VirtualProtect calls
-unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) {
+pub unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) {
     let mut old: u32 = 0;
     info!("Invoking memwrite.");
     info!("Getting access level PAGE_EXECUTE_READWRITE...");
@@ -329,6 +329,10 @@ unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) {
     };
 }
 
+
+
+// MARK: Assembly
+
 /// e8 = call rel32
 /// gives absolute address of sub
 pub unsafe fn where_is_E8call_going(e8_byte: *const u8) -> usize {
@@ -342,19 +346,50 @@ pub unsafe fn where_is_E8call_going(e8_byte: *const u8) -> usize {
     place
 }
 
+pub fn make_E9_jmp(addr_of_e9: usize, jmp_to: usize) -> Result<[u8; 5], ()> {
+    let mut arr: [u8; 5] = [0xE9, 0x00, 0x00, 0x00, 0x00];
+    let rel = jmp_to.wrapping_sub(addr_of_e9 + 5) as isize;
+    let rel32 = i32::try_from(rel);
+    if rel32.is_err() {
+        error!("[make_E9_jmp] target out of rel32 range");
+        return Err(());
+    }
+
+    arr[1..5].copy_from_slice(&rel32.unwrap().to_le_bytes());
+    info!("[make_E9_jmp] Encoded jmp rel32: {:02X?}", arr);
+
+    Ok(arr)
+}
+pub fn make_0F85_jnz(addr_of_0f: usize, jmp_to: usize) -> Result<[u8; 6], ()> {
+    let mut arr: [u8; 6] = [0x0F, 0x85, 0x00, 0x00, 0x00, 0x00];
+    let rel = jmp_to.wrapping_sub(addr_of_0f + 6) as isize;
+    let rel32 = i32::try_from(rel);
+    if rel32.is_err() {
+        error!("[make_0FB5_jnz] target out of rel32 range");
+        return Err(());
+    }
+
+    arr[2..6].copy_from_slice(&rel32.unwrap().to_le_bytes());
+    info!("[make_0FB5_jnz] Encoded jnz rel32: {:02X?}", arr);
+
+    Ok(arr)
+}
+
 /// FF 25 = jmp [rip+rel32].
 /// gives absolute address of sub
 pub unsafe fn where_is_FF25jmp_going(FF_byte: *const u8) -> usize {
-    if *FF_byte != 0xFF {
-        die!("[where_is_FF25jmp_going] 0x{:X} aint FF", *FF_byte as usize);
-    }
-    if (FF_byte.add(1)).read_unaligned() != 0x25 {
-        die!("[where_is_FF25jmp_going] 0x{:X} aint 25", (*FF_byte.add(1)) as usize);
-    }
-
     let rel = (FF_byte.add(2) as *const i32).read_unaligned();
     let place = (FF_byte.add(6).offset(rel as isize) as *const usize).read_unaligned();
 
     // info!("[where_is_FF25jmp_going] FF25 @ 0x{:X} -> jmp 0x{:X}", FF_byte as usize, place);
+    place
+}
+
+/// 0F 85 = jnz rip+rel32.
+/// gives absolute address of sub
+pub unsafe fn where_is_0F85jne_going(_0F_byte: *const u8) -> usize {
+    let rel = (_0F_byte.add(2) as *const i32).read_unaligned();
+    let place = _0F_byte.add(6).offset(rel as isize) as usize;
+
     place
 }
