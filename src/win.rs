@@ -142,7 +142,7 @@ pub unsafe fn register_dll_hook() {
 
 unsafe extern "system" fn dll_callback(reason: u32, data: *const LDR_DLL_NOTIFICATION_DATA, _context: *mut c_void) {
     let n = &*(*data).Loaded.BaseDllName;
-    info!("[dll] {} {}", String::from_utf16_lossy(std::slice::from_raw_parts(n.Buffer, (n.Length / 2) as usize)), if reason == 1 { "loaded" } else { "unloaded" });
+    // info!("[dll] {} {}", String::from_utf16_lossy(std::slice::from_raw_parts(n.Buffer, (n.Length / 2) as usize)), if reason == 1 { "loaded" } else { "unloaded" });
 
     if reason != LDR_DLL_NOTIFICATION_REASON_LOADED {
         return;

@@ -59,7 +59,7 @@ pub unsafe fn patch_protmem() {
     let leave = where_is_E8call_going(enter_or_exit_e8.locs[1] as _);
     good!("callsite of BNetSec::ProtMem::leave() @ 0x{:X}", leave);
 
-    // ---- finding hasn function ----
+    // ---- finding hash function ----
     let mut hash_e8 = scan("E8", (enter_or_exit_e8.locs[1] + 5) as _, 0x40);
     hash_e8 = hash_e8.filter(|addr| {
         let suspect_fn = where_is_E8call_going(addr as _);
