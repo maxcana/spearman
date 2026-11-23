@@ -80,8 +80,8 @@ pub unsafe fn on_dll() {
     info!("Assuming unpacking is complete.");
     mem::patch_protmem();
     
-    // info!("Starting spy thread...");
-    // std::thread::spawn(|| { spy(); }); // wait for spy.rs to tell us on_archives_loaded()
+    info!("Starting spy thread...");
+    std::thread::spawn(|| { spy(); }); // wait for spy.rs to tell us on_archives_loaded()
 }
 
 pub unsafe fn on_dfh_patched() {
@@ -92,8 +92,8 @@ pub unsafe fn on_archives_loaded() {
     good!("All archives loaded!");
     good!("Have fun! :D");
 
-    info!("This console will automatically close in 2 seconds.");
-    thread::sleep(std::time::Duration::from_secs(2));
+    info!("This console will automatically close in 5 seconds.");
+    thread::sleep(std::time::Duration::from_secs(5));
     FreeConsole();
 }
 

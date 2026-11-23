@@ -363,7 +363,11 @@ pub unsafe fn memwrite(addr: *mut u8, new_bytes: &[u8]) {
     }
     // write the pattern back
     addr.copy_from_nonoverlapping(new_bytes.as_ptr(), new_bytes.len());
-    info!("Replaced {} bytes with {:02X?}.", new_bytes.len(), new_bytes);
+    if new_bytes.len() <= 25 {
+        info!("Replaced {} bytes with {:02X?}.", new_bytes.len(), new_bytes );
+    } else {
+        info!("Replaced {} bytes with {}, ... ].", new_bytes.len(), format!("{:02X?}", &new_bytes[0..25]).trim_end_matches("]"));
+    }
     // info!("Flushing instruction cache...");
     // FlushInstructionCache(GetCurrentProcess(), addr as _, new_bytes.len());
     info!("Reverting protection...");

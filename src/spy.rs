@@ -1,6 +1,11 @@
 // spy.rs: spies on the warnings.log file
 
-use std::{io::{Read, Seek}, path::PathBuf, thread, time::Duration};
+use std::{
+    io::{Read, Seek},
+    path::PathBuf,
+    thread,
+    time::Duration,
+};
 
 use winapi::um::wincon::FreeConsole;
 
@@ -12,18 +17,31 @@ fn get_log_path() -> Result<PathBuf, u64> {
             return Err(1);
         }
     };
-    // check all 
-    // vec![
-    //     PathBuf::from(&userdir).join("Documents").join("My Games").join("Age of Empires IV").join("warnings.log"),
-    //     PathBuf::from(&userdir).join("OneDrive").join("Documents").join("My Games").join("Age of Empires IV").join("warnings.log"),
-    // ]
-    Ok(PathBuf::from(userdir).join("Documents").join("My Games").join("Age of Empires IV").join("warnings.log"))
+
+    let candidates = [
+        PathBuf::from(&userdir).join("Documents").join("My Games").join("Age of Empires IV").join("warnings.log"),
+        PathBuf::from(&userdir)
+            .join("OneDrive")
+            .join("Documents")
+            .join("My Games")
+            .join("Age of Empires IV")
+            .join("warnings.log"),
+    ];
+
+    for path in candidates {
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+
+    error!("Could not find warnings.log in Documents or OneDrive\\Documents.");
+    Err(2)
 }
 
 pub fn clear_log() -> Result<(), u64> {
     let log_path = match get_log_path() {
         Ok(p) => p,
-        Err(e) => return Err(e)
+        Err(e) => return Err(e),
     };
     std::fs::write(log_path, "").map_err(|_| 2)
 }
@@ -32,14 +50,16 @@ pub unsafe fn spy() {
     let log_path = match get_log_path() {
         Ok(p) => p,
         Err(_) => {
-            error!("Failed to determine warnings.log path. Spy cannot run."); return
+            error!("Failed to determine warnings.log path. Spy cannot run.");
+            spyfail();
+            return;
         }
     };
 
     info!("Starting spy on {}.", log_path.display());
-    
+
     let mut bytes_read: u64 = 0;
-    loop{
+    loop {
         if let Ok(mut file) = std::fs::File::open(&log_path) {
             file.seek(std::io::SeekFrom::Start(bytes_read)).ok();
             let mut new: String = "".to_owned();
@@ -50,7 +70,7 @@ pub unsafe fn spy() {
                     let new_lines: Vec<&str> = new.split("\n").collect();
                     new_lines.clone().into_iter().enumerate().for_each(|(i, line)| {
                         let archive_path = line.split("age of empires iv\\").nth(1).unwrap_or("?.sga").split(".sga").nth(0).unwrap_or("?").to_owned() + ".sga";
-                        let next_line: &str = if (i < new_lines.len() - 1) {new_lines[i + 1]} else {return};
+                        let next_line: &str = if (i < new_lines.len() - 1) { new_lines[i + 1] } else { return };
                         if line.contains("ARC -- ") {
                             if next_line.contains("corrupt") {
                                 error!("ARC -- {} failed.", archive_path)
@@ -60,23 +80,30 @@ pub unsafe fn spy() {
                         }
                         if line.contains("Loading step: [Localization]") {
                             info!("Detected localization step.");
-                            unsafe { crate::on_archives_loaded(); return }
+                            unsafe {
+                                crate::on_archives_loaded();
+                                return;
+                            }
                         }
                     });
-                },
-                Err(_) => error!("Spy failed to read from warnings.log.")
+                }
+                Err(_) => error!("Spy failed to read from warnings.log."),
             }
         } else {
-            error!("Spy failed to open warnings.log.");
-            info!("Warnings.log may not be located in the default location.");
-            info!("Patches should still work, but no pretty logs.");
-            info!("Triggering early exit to avoid detection!");
-            unsafe { 
-                thread::sleep(std::time::Duration::from_secs(4));
-                FreeConsole();
-                return;
-            };
+            spyfail();
         };
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+unsafe fn spyfail() {
+    error!("Spy failed to open warnings.log.");
+    info!("Warnings.log may not be located in the default location.");
+    info!("Patches should still work, but no pretty logs.");
+    info!("Triggering early exit to avoid detection!");
+    unsafe {
+        thread::sleep(std::time::Duration::from_secs(4));
+        FreeConsole();
+        return;
+    };
 }

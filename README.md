@@ -10,7 +10,7 @@ Bypass SGA verification™
 
 ## what is this
 
-A library that scans module memory space and patches assembly instructions to enable loading unsigned .sga files in Age of Empires 4, with a focus on simplistic code!
+A library that scans module memory space and patches assembly instructions and  to enable loading unsigned .sga files in Age of Empires 4, with a focus on simplistic code!
 
 This allows greater modding possibilities, as you can patch core game features that the in-game modding tools don't let you. Theoretically this allows you to do things such as create entirely new civilizations, modify any game code you desire, modify the game's UI, [etc](#modding-tips).
 
@@ -147,7 +147,7 @@ For unsupported files, you may have to understand the format and burn it into yo
 ### why did you make this
 
 1. out of love for the game
-2. to give modders more power, because y'all saying "modding is dead"
+2. to give modders more power
 3. i wanted walls in Crucible
 
 ### is this a virus
